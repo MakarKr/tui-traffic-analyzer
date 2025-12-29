@@ -201,13 +201,17 @@ jobs:
         path: artifacts
         merge-multiple: true
 
-    - name: Get current date and time for tag
+    - name: Get current date and time for tag (Moscow time)
       id: tag_datetime
-      run: echo "tag_datetime=$(date +'%d.%m.%Y-%H-%M')" >> $GITHUB_OUTPUT
+      run: |
+        export TZ="Europe/Moscow"
+        echo "tag_datetime=$(date +'%d.%m.%Y-%H-%M')" >> $GITHUB_OUTPUT
 
-    - name: Get current date and time for display
+    - name: Get current date and time for display (Moscow time)
       id: display_datetime
-      run: echo "display_datetime=$(date +'%d.%m.%Y %H:%M')" >> $GITHUB_OUTPUT
+      run: |
+        export TZ="Europe/Moscow"
+        echo "display_datetime=$(date +'%d.%m.%Y %H:%M')" >> $GITHUB_OUTPUT
 
     - name: Get commit hash from context
       id: commit
@@ -230,7 +234,7 @@ jobs:
         tag_name: build-${{ steps.tag_datetime.outputs.tag_datetime }}-${{ steps.commit.outputs.hash }}
         name: "Build ${{ steps.display_datetime.outputs.display_datetime }} (${{ steps.commit.outputs.hash }})"
         body: |
-          **Built on:** ${{ steps.display_datetime.outputs.display_datetime }}
+          **Built on:** ${{ steps.display_datetime.outputs.display_datetime }} (MSK)
           **Commit:** ${{ steps.commit.outputs.hash }}
 
           ### Included Files:
