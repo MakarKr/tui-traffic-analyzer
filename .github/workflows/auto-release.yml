@@ -12,8 +12,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-20.04, windows-latest]
-        python-version: [3.9]
+        os: [ubuntu-latest, windows-latest]
+        python-version: [3.12]
 
     steps:
     - name: Checkout code
@@ -115,7 +115,7 @@ jobs:
         Priority: optional
         Architecture: amd64
         Depends: python3
-        Maintainer: Makar Krapivin <makar@example.com>
+        Maintainer: Makar Krapivin <mackarkrapivin505@gmail.com>
         Description: TUI Traffic Analyzer
          Network traffic analysis tool with TUI interface
         Built: $(date +%d.%m.%Y)
@@ -156,7 +156,7 @@ jobs:
         chmod +x %{buildroot}/usr/bin/tui-traffic-analyzer
 
         %changelog
-        * $(date +"%a %b %d %Y") Makar Krapivin <makar@example.com> - 1.0.0-1
+        * $(date +"%a %b %d %Y") Makar Krapivin <mackarkrapivin505@gmail.com> - 1.0.0-1
         - Initial build $(date +%d.%m.%Y)
         EOF
 
@@ -179,7 +179,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: build
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -220,7 +220,8 @@ jobs:
           - RPM Package (.rpm)
 
           ### Build Information:
-          - Python 3.9
+          - Python 3.12
+          - Ubuntu Latest
           - Built automatically on every commit
 
           **Note:** This is an automatic build. For production use, please check the latest stable release.
@@ -230,10 +231,10 @@ jobs:
     - name: Upload Release Assets
       run: |
         # Find and upload all built files
-        find artifacts -name "*.exe" -exec echo "Found EXE: {}" \; -exec cp {} tui-traffic-analyzer-windows-x64.exe \;
-        find artifacts -name "*.AppImage" -exec echo "Found AppImage: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.AppImage \;
-        find artifacts -name "*.deb" -exec echo "Found DEB: {}" \; -exec cp {} tui-traffic-analyzer-linux-amd64.deb \;
-        find artifacts -name "*.rpm" -exec echo "Found RPM: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.rpm \;
+        find artifacts -name "*.exe" -exec echo "Found EXE: {}" \; -exec cp {} tui-traffic-analyzer-windows-x64.exe \; 2>/dev/null || true
+        find artifacts -name "*.AppImage" -exec echo "Found AppImage: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.AppImage \; 2>/dev/null || true
+        find artifacts -name "*.deb" -exec echo "Found DEB: {}" \; -exec cp {} tui-traffic-analyzer-linux-amd64.deb \; 2>/dev/null || true
+        find artifacts -name "*.rpm" -exec echo "Found RPM: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.rpm \; 2>/dev/null || true
 
         # Create dummy files if some are missing
         [ ! -f tui-traffic-analyzer-windows-x64.exe ] && touch tui-traffic-analyzer-windows-x64.exe && echo "Dummy EXE created"
