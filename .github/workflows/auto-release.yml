@@ -137,6 +137,9 @@ jobs:
         # Create basic RPM structure
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
+        # Build with PyInstaller first to get the executable
+        pyinstaller --onefile main.py
+
         # Create simple spec file
         cat > ~/rpmbuild/SPECS/tui-traffic-analyzer.spec << EOF
         Name: tui-traffic-analyzer
