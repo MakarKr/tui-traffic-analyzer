@@ -64,14 +64,14 @@ jobs:
         # Copy executable
         cp dist/main AppDir/usr/bin/tui-traffic-analyzer
 
-        # Create desktop file
+        # Create desktop file without icon requirement
         cat > AppDir/usr/share/applications/tui-traffic-analyzer.desktop << EOF
         [Desktop Entry]
         Name=TUI Traffic Analyzer
         Exec=tui-traffic-analyzer
         Type=Application
         Terminal=true
-        Categories=Network;Security;
+        Categories=Network;System;
         EOF
 
         # Create AppRun script
@@ -88,8 +88,8 @@ jobs:
         # Create symbolic link for desktop file
         ln -s usr/share/applications/tui-traffic-analyzer.desktop AppDir/tui-traffic-analyzer.desktop
 
-        # Create AppImage with --no-appstream to avoid AppStream issues
-        ./appimagetool --no-appstream AppDir
+        # Create AppImage with flags to ignore missing icon and other warnings
+        ./appimagetool --no-appstream --no-icon-check AppDir
         mv TUI_Traffic_Analyzer-x86_64.AppImage tui-traffic-analyzer-linux-x86_64.AppImage
 
     - name: Build DEB Package
