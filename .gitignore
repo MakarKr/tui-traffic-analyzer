@@ -1,0 +1,5 @@
+*.db
+.idea/
+__pycache__/
+sessions.db
+svodka.md
