@@ -1,8 +1,8 @@
 # TUI Traffic Analyzer
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg "Python 3.8+")
-![License](https://img.shields.io/badge/license-MIT-green.svg "License: MIT")
-![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg "Platform: Linux | Windows | MacOS")
+![Python](https://img.shields.io/badge/Python-3.8+-blue.svg "Python 3.8+")
+![License](https://img.shields.io/badge/License-GPL--3.0-green.svg "License: GPL-3.0")
+![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey.svg "Platform: Linux | Windows | MacOS")
 
 **TUI Traffic Analyzer** - это консольный инструмент для анализа сетевого трафика с интерактивным текстовым интерфейсом (TUI). Программа позволяет захватывать, анализировать и визуализировать сетевые пакеты, обнаруживать уязвимости в SSL/TLS соединениях, проводить MITM атаки и сканировать локальную сеть.
 
