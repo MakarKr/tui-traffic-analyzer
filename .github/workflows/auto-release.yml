@@ -65,8 +65,7 @@ jobs:
         cp dist/main AppDir/usr/bin/tui-traffic-analyzer
 
         # Create a transparent 1x1 pixel PNG icon
-        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d >
-AppDir/usr/bin/tui-traffic-analyzer.png
+        echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > AppDir/usr/bin/tui-traffic-analyzer.png
 
         # Create desktop file with icon
         cat > AppDir/usr/share/applications/tui-traffic-analyzer.desktop << EOF
