@@ -25,10 +25,22 @@
 - Права администратора (для захвата трафика и MITM атак)
 - Установленные зависимости
 
-### Установка зависимостей
+### Установка зависимостей *в виртуальное окружение*
+
+#### Linux/macOS
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv             # Создать виртуальное окружение
+source .venv/bin/activate        # Активировать
+pip install -r requirements.txt  # Установить зависимости
+```
+
+#### Windows
+
+```bash
+python -m venv .venv             # Создать виртуальное окружение
+.\.venv\Scripts\activate         # Активировать
+pip install -r requirements.txt  # Установить зависимости
 ```
 
 ### Запуск
@@ -36,8 +48,6 @@ pip install -r requirements.txt
 ```bash
 sudo python3 main.py
 ```
-
-### Альтернативный запуск ***без установки зависимостей***
 
 > **Примечание**: Для полноценной работы требуются права root/administrator.
 
