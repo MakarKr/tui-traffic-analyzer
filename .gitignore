@@ -1,5 +1,13 @@
+# Build artifacts
+dist/
+build/
+*.spec
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/
 *.db
 .idea/
-__pycache__/
-sessions.db
-svodka.md
+
+# GitHub Actions
+.github/workflows/*.log

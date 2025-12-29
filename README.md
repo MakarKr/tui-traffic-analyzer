@@ -25,22 +25,26 @@
 - Права администратора (для захвата трафика и MITM атак)
 - Установленные зависимости
 
-### Установка зависимостей *в виртуальное окружение*
+### Клонирование репозитория и установка зависимостей *в виртуальное окружение*
 
 #### Linux/macOS
 
 ```bash
-python -m venv .venv             # Создать виртуальное окружение
-source .venv/bin/activate        # Активировать
-pip install -r requirements.txt  # Установить зависимости
+git clone https://github.com/MakarKr/tui-traffic-analyzer  # Клонирование репозитория
+cd tui-traffic-analyzer                                    # Переход в склонированный репозиторий
+python -m venv .venv                                       # Создать виртуальное окружение
+source .venv/bin/activate                                  # Активировать
+pip install -r requirements.txt                            # Установить зависимости
 ```
 
 #### Windows
 
 ```bash
-python -m venv .venv             # Создать виртуальное окружение
-.\.venv\Scripts\activate         # Активировать
-pip install -r requirements.txt  # Установить зависимости
+git clone https://github.com/MakarKr/tui-traffic-analyzer  # Клонирование репозитория
+cd tui-traffic-analyzer                                    # Переход в склонированный репозиторий
+python -m venv .venv                                       # Создать виртуальное окружение
+.\.venv\Scripts\activate                                   # Активировать
+pip install -r requirements.txt                            # Установить зависимости
 ```
 
 ### Запуск

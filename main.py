@@ -9,6 +9,16 @@ from tui import TUI
 from utils import check_root, clear_screen
 from colorama import init, Fore
 
+# Добавляем путь к директории скрипта для корректной работы PyInstaller
+if getattr(sys, 'frozen', False):
+    # Если запущено как исполняемый файл
+    application_path = os.path.dirname(sys.executable)
+else:
+    # Если запущено как скрипт
+    application_path = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.insert(0, application_path)
+
 init(autoreset=True)
 
 
