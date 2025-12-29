@@ -23,7 +23,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Получаем всю историю коммитов
+        fetch-depth: 0
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v5
@@ -51,30 +51,23 @@ jobs:
       run: |
         pyinstaller --onefile --console --name "tui-traffic-analyzer" --add-data "config.py;." --add-data "DISCLAIMER.md;." main.py
         mv dist/tui-traffic-analyzer.exe tui-traffic-analyzer-windows-x64.exe
-        echo "Windows build completed"
 
     - name: Build Linux AppImage
       if: runner.os == 'Linux'
       run: |
-        # Install AppImage tools with FUSE support
         sudo apt-get install -y libfuse2
         wget -O appimagetool "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
         chmod +x appimagetool
 
-        # Create AppDir structure
         mkdir -p AppDir/usr/bin
         mkdir -p AppDir/usr/share/applications
 
-        # Build with PyInstaller
         pyinstaller --onefile main.py
 
-        # Copy executable
         cp dist/main AppDir/usr/bin/tui-traffic-analyzer
 
-        # Create a transparent 1x1 pixel PNG icon
         echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > AppDir/usr/bin/tui-traffic-analyzer.png
 
-        # Create desktop file with icon
         cat > AppDir/usr/share/applications/tui-traffic-analyzer.desktop << EOF
         [Desktop Entry]
         Name=TUI Traffic Analyzer
@@ -85,7 +78,6 @@ jobs:
         Categories=Network;System;
         EOF
 
-        # Create AppRun script
         cat > AppDir/AppRun << 'EOF'
         #!/bin/bash
         HERE="$(dirname "$(readlink -f "${0}")")"
@@ -96,34 +88,27 @@ jobs:
         chmod +x AppDir/AppRun
         chmod +x AppDir/usr/bin/tui-traffic-analyzer
 
-        # Create symbolic links for desktop file and icon
         ln -s usr/share/applications/tui-traffic-analyzer.desktop AppDir/tui-traffic-analyzer.desktop
         ln -s usr/bin/tui-traffic-analyzer.png AppDir/tui-traffic-analyzer.png
 
-        # Create AppImage with --no-appstream to avoid AppStream issues
         ./appimagetool --no-appstream AppDir
         mv TUI_Traffic_Analyzer-x86_64.AppImage tui-traffic-analyzer-linux-x86_64.AppImage
 
     - name: Build DEB Package
       if: runner.os == 'Linux'
       run: |
-        # Build with PyInstaller first
         pyinstaller --onefile main.py
 
-        # Create DEB structure
         mkdir -p tui-traffic-analyzer/usr/bin
         mkdir -p tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer
         mkdir -p tui-traffic-analyzer/DEBIAN
 
-        # Copy files
         cp dist/main tui-traffic-analyzer/usr/bin/tui-traffic-analyzer
-        cp README.md tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || touch tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/README
-        cp LICENSE tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || touch tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/LICENSE
+        cp README.md tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || true
+        cp LICENSE tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || true
 
-        # Make executable
         chmod +x tui-traffic-analyzer/usr/bin/tui-traffic-analyzer
 
-        # Create control file
         cat > tui-traffic-analyzer/DEBIAN/control << EOF
         Package: tui-traffic-analyzer
         Version: 1.0.0
@@ -134,33 +119,26 @@ jobs:
         Maintainer: Makar Krapivin <mackarkrapivin505@gmail.com>
         Description: TUI Traffic Analyzer
          Network traffic analysis tool with TUI interface
-        Built: $(date +%d.%m.%Y)
         EOF
 
-        # Build DEB
         dpkg-deb --build tui-traffic-analyzer
         mv tui-traffic-analyzer.deb tui-traffic-analyzer-linux-amd64.deb
 
     - name: Build RPM Package
       if: runner.os == 'Linux'
       run: |
-        # Build with PyInstaller first to get the executable
         pyinstaller --onefile main.py
 
-        # Check if the built file exists
         if [ ! -f dist/main ]; then
           echo "Error: dist/main not found"
           ls -la dist/
           exit 1
         fi
 
-        # Create RPM structure
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
-        # Copy executable to RPM sources
         cp dist/main ~/rpmbuild/SOURCES/tui-traffic-analyzer
 
-        # Create simple spec file
         cat > ~/rpmbuild/SPECS/tui-traffic-analyzer.spec << EOF
         Name: tui-traffic-analyzer
         Version: 1.0.0
@@ -186,10 +164,9 @@ jobs:
 
         %changelog
         * $(date +"%a %b %d %Y") Makar Krapivin <mackarkrapivin505@gmail.com> - 1.0.0-1
-        - Initial build $(date +%d.%m.%Y)
+        - Initial build
         EOF
 
-        # Build RPM
         rpmbuild -bb ~/rpmbuild/SPECS/tui-traffic-analyzer.spec
         cp ~/rpmbuild/RPMS/x86_64/tui-traffic-analyzer-1.0.0-1.x86_64.rpm tui-traffic-analyzer-linux-x86_64.rpm
 
@@ -209,7 +186,6 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
-    # Даем дополнительные разрешения для создания релиза
     permissions:
       contents: write
       packages: write
@@ -226,43 +202,33 @@ jobs:
         path: artifacts
         merge-multiple: true
 
-    - name: Get current date
-      id: date
-      run: echo "date=$(date +%d.%m.%Y)" >> $GITHUB_OUTPUT
+    - name: Get current date and time
+      id: datetime
+      run: echo "datetime=$(date +'%d.%m.%Y %H:%M')" >> $GITHUB_OUTPUT
 
     - name: Get commit hash from context
       id: commit
       run: echo "hash=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-    - name: List all files
-      run: |
-        echo "Artifacts directory contents:"
-        find artifacts -type f -name "*" | sort
-
     - name: Prepare release files
       run: |
-        # Копируем файлы из artifacts в текущую директорию
         mkdir -p release-files
 
-        # Копируем все файлы из artifacts
         find artifacts -type f -name "*.exe" -exec cp {} release-files/ \; 2>/dev/null || true
         find artifacts -type f -name "*.AppImage" -exec cp {} release-files/ \; 2>/dev/null || true
         find artifacts -type f -name "*.deb" -exec cp {} release-files/ \; 2>/dev/null || true
         find artifacts -type f -name "*.rpm" -exec cp {} release-files/ \; 2>/dev/null || true
 
-        echo "Files in release-files:"
         ls -la release-files/
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: build-${{ steps.date.outputs.date }}-${{ steps.commit.outputs.hash }}
-        name: "Build ${{ steps.date.outputs.date }} (${{ steps.commit.outputs.hash }})"
+        tag_name: build-${{ steps.datetime.outputs.datetime }}-${{ steps.commit.outputs.hash }}
+        name: "Build ${{ steps.datetime.outputs.datetime }} (${{ steps.commit.outputs.hash }})"
         body: |
-          ## Automatic Build Release
-
-          Built on: ${{ steps.date.outputs.date }}
-          Commit: ${{ steps.commit.outputs.hash }}
+          **Built on:** ${{ steps.datetime.outputs.datetime }}
+          **Commit:** ${{ steps.commit.outputs.hash }}
 
           ### Included Files:
           - Windows Executable (.exe)
@@ -273,10 +239,8 @@ jobs:
           ### Build Information:
           - Python 3.12
           - Built automatically on every commit
-
-          **Note:** This is an automatic build. For production use, please check the latest stable release.
         draft: false
-        prerelease: true
+        prerelease: false
         files: |
           release-files/tui-traffic-analyzer-windows-x64.exe
           release-files/tui-traffic-analyzer-linux-x86_64.AppImage
