@@ -6,7 +6,6 @@ on:
   pull_request:
     branches: [ main, master ]
 
-# Даем разрешение на запись в репозиторий
 permissions:
   contents: write
 
@@ -202,9 +201,13 @@ jobs:
         path: artifacts
         merge-multiple: true
 
-    - name: Get current date and time
-      id: datetime
-      run: echo "datetime=$(date +'%d.%m.%Y %H:%M')" >> $GITHUB_OUTPUT
+    - name: Get current date and time for tag
+      id: tag_datetime
+      run: echo "tag_datetime=$(date +'%d.%m.%Y-%H-%M')" >> $GITHUB_OUTPUT
+
+    - name: Get current date and time for display
+      id: display_datetime
+      run: echo "display_datetime=$(date +'%d.%m.%Y %H:%M')" >> $GITHUB_OUTPUT
 
     - name: Get commit hash from context
       id: commit
@@ -224,10 +227,10 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        tag_name: build-${{ steps.datetime.outputs.datetime }}-${{ steps.commit.outputs.hash }}
-        name: "Build ${{ steps.datetime.outputs.datetime }} (${{ steps.commit.outputs.hash }})"
+        tag_name: build-${{ steps.tag_datetime.outputs.tag_datetime }}-${{ steps.commit.outputs.hash }}
+        name: "Build ${{ steps.display_datetime.outputs.display_datetime }} (${{ steps.commit.outputs.hash }})"
         body: |
-          **Built on:** ${{ steps.datetime.outputs.datetime }}
+          **Built on:** ${{ steps.display_datetime.outputs.display_datetime }}
           **Commit:** ${{ steps.commit.outputs.hash }}
 
           ### Included Files:
