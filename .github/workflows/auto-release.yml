@@ -44,6 +44,7 @@ jobs:
       if: runner.os == 'Windows'
       run: |
         pyinstaller --onefile --console --name "tui-traffic-analyzer" --add-data "config.py;." --add-data "DISCLAIMER.md;." main.py
+        mv dist/tui-traffic-analyzer.exe tui-traffic-analyzer-windows-x64.exe
         echo "Windows build completed"
 
     - name: Build Linux AppImage
@@ -100,6 +101,9 @@ jobs:
     - name: Build DEB Package
       if: runner.os == 'Linux'
       run: |
+        # Build with PyInstaller first
+        pyinstaller --onefile main.py
+
         # Create DEB structure
         mkdir -p tui-traffic-analyzer/usr/bin
         mkdir -p tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer
@@ -134,11 +138,21 @@ jobs:
     - name: Build RPM Package
       if: runner.os == 'Linux'
       run: |
-        # Create basic RPM structure
-        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
-
         # Build with PyInstaller first to get the executable
         pyinstaller --onefile main.py
+
+        # Check if the built file exists
+        if [ ! -f dist/main ]; then
+          echo "Error: dist/main not found"
+          ls -la dist/
+          exit 1
+        fi
+
+        # Create RPM structure
+        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
+
+        # Copy executable to RPM sources
+        cp dist/main ~/rpmbuild/SOURCES/tui-traffic-analyzer
 
         # Create simple spec file
         cat > ~/rpmbuild/SPECS/tui-traffic-analyzer.spec << EOF
@@ -161,7 +175,7 @@ jobs:
 
         %install
         mkdir -p %{buildroot}/usr/bin
-        cp dist/main %{buildroot}/usr/bin/tui-traffic-analyzer
+        cp %{_sourcedir}/tui-traffic-analyzer %{buildroot}/usr/bin/tui-traffic-analyzer
         chmod +x %{buildroot}/usr/bin/tui-traffic-analyzer
 
         %changelog
@@ -178,10 +192,10 @@ jobs:
       with:
         name: build-artifacts-${{ runner.os }}
         path: |
-          *.exe
-          *.AppImage
-          *.deb
-          *.rpm
+          tui-traffic-analyzer-windows-x64.exe
+          tui-traffic-analyzer-linux-x86_64.AppImage
+          tui-traffic-analyzer-linux-amd64.deb
+          tui-traffic-analyzer-linux-x86_64.rpm
           dist/*.exe
           dist/main
 
@@ -240,18 +254,19 @@ jobs:
     - name: Upload Release Assets
       run: |
         # Find and upload all built files
-        find artifacts -name "*.exe" -exec echo "Found EXE: {}" \; -exec cp {} tui-traffic-analyzer-windows-x64.exe \; 2>/dev/null || true
-        find artifacts -name "*.AppImage" -exec echo "Found AppImage: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.AppImage \; 2>/dev/null || true
-        find artifacts -name "*.deb" -exec echo "Found DEB: {}" \; -exec cp {} tui-traffic-analyzer-linux-amd64.deb \; 2>/dev/null || true
-        find artifacts -name "*.rpm" -exec echo "Found RPM: {}" \; -exec cp {} tui-traffic-analyzer-linux-x86_64.rpm \; 2>/dev/null || true
+        find artifacts -name "tui-traffic-analyzer-windows-x64.exe" -exec echo "Found EXE: {}" \; -exec cp {} . \; 2>/dev/null || true
+        find artifacts -name "tui-traffic-analyzer-linux-x86_64.AppImage" -exec echo "Found AppImage: {}" \; -exec cp {} . \; 2>/dev/null || true
+        find artifacts -name "tui-traffic-analyzer-linux-amd64.deb" -exec echo "Found DEB: {}" \; -exec cp {} . \; 2>/dev/null || true
+        find artifacts -name "tui-traffic-analyzer-linux-x86_64.rpm" -exec echo "Found RPM: {}" \; -exec cp {} . \; 2>/dev/null || true
 
-        # Create dummy files if some are missing
-        [ ! -f tui-traffic-analyzer-windows-x64.exe ] && touch tui-traffic-analyzer-windows-x64.exe && echo "Dummy EXE created"
-        [ ! -f tui-traffic-analyzer-linux-x86_64.AppImage ] && touch tui-traffic-analyzer-linux-x86_64.AppImage && echo "Dummy AppImage created"
-        [ ! -f tui-traffic-analyzer-linux-amd64.deb ] && touch tui-traffic-analyzer-linux-amd64.deb && echo "Dummy DEB created"
-        [ ! -f tui-traffic-analyzer-linux-x86_64.rpm ] && touch tui-traffic-analyzer-linux-x86_64.rpm && echo "Dummy RPM created"
+        # Create dummy files if some are missing (for debugging)
+        [ ! -f tui-traffic-analyzer-windows-x64.exe ] && echo "Warning: Windows EXE not found"
+        [ ! -f tui-traffic-analyzer-linux-x86_64.AppImage ] && echo "Warning: AppImage not found"
+        [ ! -f tui-traffic-analyzer-linux-amd64.deb ] && echo "Warning: DEB package not found"
+        [ ! -f tui-traffic-analyzer-linux-x86_64.rpm ] && echo "Warning: RPM package not found"
 
     - name: Upload Windows EXE
+      if: hashFiles('tui-traffic-analyzer-windows-x64.exe') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -262,6 +277,7 @@ jobs:
         asset_content_type: application/octet-stream
 
     - name: Upload AppImage
+      if: hashFiles('tui-traffic-analyzer-linux-x86_64.AppImage') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -272,6 +288,7 @@ jobs:
         asset_content_type: application/octet-stream
 
     - name: Upload DEB
+      if: hashFiles('tui-traffic-analyzer-linux-amd64.deb') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -282,6 +299,7 @@ jobs:
         asset_content_type: application/vnd.debian.binary-package
 
     - name: Upload RPM
+      if: hashFiles('tui-traffic-analyzer-linux-x86_64.rpm') != ''
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
