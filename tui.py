@@ -121,6 +121,77 @@ class TUI:
             # В случае ошибки, ничего не делаем
             return False
 
+    def calculate_column_widths(self, total_width: int, columns_config: Dict) -> Dict[str, int]:
+        """Рассчитать ширины столбцов на основе доступной ширины"""
+        # Определяем минимальные и желаемые ширины столбцов
+        columns = columns_config
+
+        # Вычисляем общую желаемую ширину
+        total_desired = sum(col['desired'] for col in columns.values())
+
+        # Если помещается полностью, используем желаемые ширины
+        if total_desired <= total_width:
+            return {key: columns[key]['desired'] for key in columns}
+
+        # Вычисляем недостающую ширину
+        deficit = total_desired - total_width
+
+        # Сортируем столбцы по приоритету (чем выше priority, тем позже урезаем)
+        sorted_cols = sorted(columns.items(), key=lambda x: x[1]['priority'])
+
+        # Сначала устанавливаем все ширины на желаемые
+        result = {key: columns[key]['desired'] for key in columns}
+
+        # Урезаем столбцы, начиная с наименьшего приоритета
+        for col_name, col_info in reversed(sorted_cols):
+            if deficit <= 0:
+                break
+
+            current_width = result[col_name]
+            min_width = col_info['min']
+
+            # Сколько можно урезать
+            available_cut = current_width - min_width
+
+            if available_cut > 0:
+                # Урезаем этот столбец
+                cut_amount = min(deficit, available_cut)
+                result[col_name] -= cut_amount
+                deficit -= cut_amount
+
+        # Если всё ещё не хватает, урезаем минимальные ширины пропорционально
+        if deficit > 0:
+            # Распределяем дефицит пропорционально среди всех столбцов
+            for col_name in result:
+                result[col_name] = max(col_info['min'], result[col_name] - deficit // len(result))
+
+        return result
+
+    def format_column_text(self, text: str, width: int, align: str = 'left') -> str:
+        """Форматировать текст столбца с заданной шириной и выравниванием"""
+        text = self.sanitize_string(text)
+
+        # Если текст уже подходит, возвращаем его
+        if len(text) <= width:
+            if align == 'left':
+                return text.ljust(width)
+            elif align == 'right':
+                return text.rjust(width)
+            else:  # center
+                return text.center(width)
+
+        # Если текст слишком длинный, обрезаем и добавляем "..."
+        if width <= 3:
+            return '.' * width  # Минимальный индикатор
+
+        truncated = text[:width - 3] + "..."
+        if align == 'left':
+            return truncated.ljust(width)
+        elif align == 'right':
+            return truncated.rjust(width)
+        else:  # center
+            return truncated.center(width)
+
     def run(self):
         """Запустить главный цикл TUI"""
         # Главный цикл
@@ -473,8 +544,48 @@ class TUI:
             self.safe_addstr(y, x, "No packets captured yet")
             return
 
+        # Конфигурация столбцов для пакетов
+        columns_config = {
+            'time': {'min': 8, 'desired': 10, 'priority': 1},    # Время
+            'src': {'min': 15, 'desired': 20, 'priority': 3},    # Источник
+            'dst': {'min': 15, 'desired': 20, 'priority': 4},    # Назначение
+            'proto': {'min': 6, 'desired': 8, 'priority': 2},    # Протокол
+            'size': {'min': 6, 'desired': 8, 'priority': 2},     # Размер
+            'info': {'min': 15, 'desired': 25, 'priority': 5},   # Информация
+        }
+
+        # Рассчитываем ширины столбцов с учётом доступной ширины
+        # Учитываем пробелы между столбцами: 1 пробел между 6 столбцами = 5 пробелов
+        available_width = width - 5
+        col_widths = self.calculate_column_widths(available_width, columns_config)
+
+        # Проверяем, что суммарная ширина не превышает доступную
+        total_col_width = sum(col_widths.values())
+        if total_col_width > available_width:
+            # Корректируем ширину последнего столбца
+            diff = total_col_width - available_width
+            col_widths['info'] = max(columns_config['info']['min'], col_widths['info'] - diff)
+
+        # Создаём строку формата для выравнивания
+        fmt = (
+            f"{{:<{col_widths['time']}}} "
+            f"{{:<{col_widths['src']}}} "
+            f"{{:<{col_widths['dst']}}} "
+            f"{{:<{col_widths['proto']}}} "
+            f"{{:>{col_widths['size']}}} "  # Размер выравниваем по правому краю
+            f"{{:<{col_widths['info']}}}"
+        )
+
         # Заголовок таблицы
-        header = f"{'Time':<12} {'Source':<20} {'Destination':<20} {'Protocol':<10} {'Size':<8} {'Info':<30}"
+        header = fmt.format(
+            self.format_column_text("Time", col_widths['time']),
+            self.format_column_text("Source", col_widths['src']),
+            self.format_column_text("Dest", col_widths['dst']),
+            self.format_column_text("Proto", col_widths['proto']),
+            self.format_column_text("Size", col_widths['size'], 'right'),
+            self.format_column_text("Info", col_widths['info'])
+        )
+
         self.stdscr.attron(curses.A_BOLD)
         self.safe_addstr(y, x, header[:width])
         self.stdscr.attroff(curses.A_BOLD)
@@ -489,72 +600,95 @@ class TUI:
             # Форматируем время
             timestamp = datetime.fromtimestamp(packet.timestamp).strftime('%H:%M:%S')
 
+            # Форматируем источник и назначение
+            src = f"{packet.src_ip}:{packet.src_port}"
+            dst = f"{packet.dst_ip}:{packet.dst_port}"
+
             # Форматируем информацию в зависимости от типа пакета
             info = ""
             if packet.packet_type == PacketType.HTTP_REQUEST:
-                method = self.sanitize_string(packet.data.get('method', ''))
-                host = self.sanitize_string(packet.data.get('host', ''))
-                info = f"HTTP {method} {host}"
+                method = packet.data.get('method', '')
+                host = packet.data.get('host', '')
+                if method and host:
+                    info = f"{method} {host[:15]}" if len(host) > 15 else f"{method} {host}"
+                else:
+                    info = "HTTP Request"
             elif packet.packet_type == PacketType.HTTP_RESPONSE:
-                status = self.sanitize_string(packet.data.get('status_code', ''))
-                info = f"HTTP {status}"
+                status = packet.data.get('status_code', '')
+                info = f"HTTP {status}" if status else "HTTP Response"
             elif packet.packet_type == PacketType.HTTPS_SESSION:
-                sni = self.sanitize_string(packet.data.get('sni', 'TLS'))
-                info = f"HTTPS {sni}"
+                sni = packet.data.get('sni', '')
+                if sni:
+                    info = f"TLS {sni[:15]}" if len(sni) > 15 else f"TLS {sni}"
+                else:
+                    info = "HTTPS"
             elif packet.packet_type == PacketType.DNS_QUERY:
                 queries = packet.data.get('queries', [])
-                if queries:
-                    qname = self.sanitize_string(queries[0].get('qname', ''))
-                    info = f"DNS Query: {qname}"
+                if queries and len(queries) > 0:
+                    qname = queries[0].get('qname', '')
+                    if qname:
+                        info = f"DNS {qname[:15]}" if len(qname) > 15 else f"DNS {qname}"
+                if not info:
+                    info = "DNS Query"
             elif packet.packet_type == PacketType.DNS_RESPONSE:
                 answers = packet.data.get('answers', [])
-                if answers:
-                    rdata = self.sanitize_string(answers[0].get('rdata', ''))
-                    info = f"DNS Answer: {rdata}"
+                if answers and len(answers) > 0:
+                    rdata = answers[0].get('rdata', '')
+                    if rdata:
+                        info = f"DNS→ {rdata[:15]}" if len(rdata) > 15 else f"DNS→ {rdata}"
+                if not info:
+                    info = "DNS Response"
+            elif packet.packet_type == PacketType.TCP_CONNECTION:
+                info = "TCP"
+            elif packet.packet_type == PacketType.UDP_SESSION:
+                info = "UDP"
 
-            # Очищаем все строковые поля
-            src_ip = self.sanitize_string(packet.src_ip)
-            dst_ip = self.sanitize_string(packet.dst_ip)
-            protocol = self.sanitize_string(packet.protocol)
+            # Форматируем размер
+            size_str = format_bytes(packet.size)
 
-            # Создаем строку с очищенными данными
-            line = f"{timestamp:<12} {src_ip}:{packet.src_port:<20} {dst_ip}:{packet.dst_port:<20} {protocol:<10} {packet.size:<8} {info:<30}"
-
-            # Дополнительная очистка всей строки
-            line = self.sanitize_string(line)
-
-            # Обрезаем строку до максимальной ширины
-            if len(line) > width:
-                line = line[:width - 3] + "..."
-
-            # Выбираем цвет в зависимости от типа пакета
-            color = curses.color_pair(0)
-            if packet.packet_type == PacketType.HTTP_REQUEST:
-                color = curses.color_pair(1)  # Зеленый
-            elif packet.packet_type == PacketType.HTTP_RESPONSE:
-                color = curses.color_pair(4)  # Голубой
-            elif packet.packet_type == PacketType.HTTPS_SESSION:
-                color = curses.color_pair(5)  # Пурпурный
-            elif packet.packet_type in [PacketType.DNS_QUERY, PacketType.DNS_RESPONSE]:
-                color = curses.color_pair(6)  # Синий
-
-            # Выделяем выбранную строку
-            if i == self.selected_row and self.current_tab == "packets":
-                self.stdscr.attron(curses.color_pair(7) | curses.A_BOLD)
-
+            # Форматируем строку с выравниванием
             try:
+                line = fmt.format(
+                    self.format_column_text(timestamp, col_widths['time']),
+                    self.format_column_text(src, col_widths['src']),
+                    self.format_column_text(dst, col_widths['dst']),
+                    self.format_column_text(packet.protocol, col_widths['proto']),
+                    self.format_column_text(size_str, col_widths['size'], 'right'),
+                    self.format_column_text(info, col_widths['info'])
+                )
+
+                # Убедимся, что строка не превышает доступную ширину
+                if len(line) > width:
+                    line = line[:width]
+
+                # Выбираем цвет в зависимости от типа пакета
+                color = curses.color_pair(0)
+                if packet.packet_type == PacketType.HTTP_REQUEST:
+                    color = curses.color_pair(1)  # Зеленый
+                elif packet.packet_type == PacketType.HTTP_RESPONSE:
+                    color = curses.color_pair(4)  # Голубой
+                elif packet.packet_type == PacketType.HTTPS_SESSION:
+                    color = curses.color_pair(5)  # Пурпурный
+                elif packet.packet_type in [PacketType.DNS_QUERY, PacketType.DNS_RESPONSE]:
+                    color = curses.color_pair(6)  # Синий
+
+                # Выделяем выбранную строку
+                if i == self.selected_row and self.current_tab == "packets":
+                    self.stdscr.attron(curses.color_pair(7) | curses.A_BOLD)
+
                 self.stdscr.attron(color)
                 self.safe_addstr(line_y, x, line)
                 self.stdscr.attroff(color)
-            except Exception as e:
-                # В случае ошибки вывода, показываем сообщение об ошибке
-                error_msg = f"Error displaying packet {i}"
-                if len(error_msg) > width:
-                    error_msg = error_msg[:width]
-                self.safe_addstr(line_y, x, error_msg)
 
-            if i == self.selected_row and self.current_tab == "packets":
-                self.stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
+                if i == self.selected_row and self.current_tab == "packets":
+                    self.stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
+
+            except Exception as e:
+                # В случае ошибки показываем упрощённую строку
+                error_line = f"Packet {i+1}"
+                if len(error_line) > width:
+                    error_line = error_line[:width]
+                self.safe_addstr(line_y, x, error_line)
 
     def draw_sessions(self, y, x, width, height):
         """Нарисовать список сессий"""
@@ -564,8 +698,48 @@ class TUI:
             self.safe_addstr(y, x, "No sessions yet")
             return
 
+        # Конфигурация столбцов для сессий
+        columns_config = {
+            'id': {'min': 12, 'desired': 20, 'priority': 1},
+            'client': {'min': 15, 'desired': 20, 'priority': 3},
+            'server': {'min': 15, 'desired': 20, 'priority': 4},
+            'duration': {'min': 6, 'desired': 10, 'priority': 2},
+            'packets': {'min': 6, 'desired': 8, 'priority': 2},
+            'bytes': {'min': 8, 'desired': 12, 'priority': 2},
+        }
+
+        # Рассчитываем ширины столбцов с учётом доступной ширины
+        # 5 пробелов между 6 столбцами
+        available_width = width - 5
+        col_widths = self.calculate_column_widths(available_width, columns_config)
+
+        # Проверяем, что суммарная ширина не превышает доступную
+        total_col_width = sum(col_widths.values())
+        if total_col_width > available_width:
+            # Корректируем ширину последнего столбца
+            diff = total_col_width - available_width
+            col_widths['id'] = max(columns_config['id']['min'], col_widths['id'] - diff)
+
+        # Создаём строку формата
+        fmt = (
+            f"{{:<{col_widths['id']}}} "
+            f"{{:<{col_widths['client']}}} "
+            f"{{:<{col_widths['server']}}} "
+            f"{{:<{col_widths['duration']}}} "
+            f"{{:>{col_widths['packets']}}} "
+            f"{{:>{col_widths['bytes']}}}"
+        )
+
         # Заголовок таблицы
-        header = f"{'ID':<30} {'Client':<20} {'Server':<20} {'Duration':<10} {'Packets':<8} {'Bytes':<10}"
+        header = fmt.format(
+            self.format_column_text("ID", col_widths['id']),
+            self.format_column_text("Client", col_widths['client']),
+            self.format_column_text("Server", col_widths['server']),
+            self.format_column_text("Duration", col_widths['duration']),
+            self.format_column_text("Pkts", col_widths['packets'], 'right'),
+            self.format_column_text("Bytes", col_widths['bytes'], 'right')
+        )
+
         self.stdscr.attron(curses.A_BOLD)
         self.safe_addstr(y, x, header[:width])
         self.stdscr.attroff(curses.A_BOLD)
@@ -578,35 +752,44 @@ class TUI:
                 break
 
             # Укорачиваем ID
-            session_id_short = session.session_id[:28] + "..." if len(session.session_id) > 30 else session.session_id
+            session_id = session.session_id
+            if len(session_id) > col_widths['id']:
+                session_id = session_id[:col_widths['id'] - 3] + "..."
 
             # Форматируем данные
+            client = f"{session.client_ip}:{session.client_port}"
+            server = f"{session.server_ip}:{session.server_port}"
             duration = format_time_delta(session.get_duration())
             packets = len(session.packets)
-            bytes_formatted = format_bytes(session.total_bytes)
+            bytes_fmt = format_bytes(session.total_bytes)
 
-            # Очищаем строковые поля
-            session_id_display = self.sanitize_string(session_id_short)
-            client_ip = self.sanitize_string(session.client_ip)
-            server_ip = self.sanitize_string(session.server_ip)
+            try:
+                line = fmt.format(
+                    self.format_column_text(session_id, col_widths['id']),
+                    self.format_column_text(client, col_widths['client']),
+                    self.format_column_text(server, col_widths['server']),
+                    self.format_column_text(duration, col_widths['duration']),
+                    self.format_column_text(str(packets), col_widths['packets'], 'right'),
+                    self.format_column_text(bytes_fmt, col_widths['bytes'], 'right')
+                )
 
-            line = f"{session_id_display:<30} {client_ip}:{session.client_port:<20} {server_ip}:{session.server_port:<20} {duration:<10} {packets:<8} {bytes_formatted:<10}"
+                if len(line) > width:
+                    line = line[:width]
 
-            # Очистка строки
-            line = self.sanitize_string(line)
+                # Выделяем выбранную строку
+                if i == self.selected_row and self.current_tab == "sessions":
+                    self.stdscr.attron(curses.color_pair(7))
 
-            # Обрезаем до ширины
-            if len(line) > width:
-                line = line[:width - 3] + "..."
+                self.safe_addstr(line_y, x, line)
 
-            # Выделяем выбранную строку
-            if i == self.selected_row and self.current_tab == "sessions":
-                self.stdscr.attron(curses.color_pair(7))
+                if i == self.selected_row and self.current_tab == "sessions":
+                    self.stdscr.attroff(curses.color_pair(7))
 
-            self.safe_addstr(line_y, x, line)
-
-            if i == self.selected_row and self.current_tab == "sessions":
-                self.stdscr.attroff(curses.color_pair(7))
+            except Exception as e:
+                error_line = f"Session {i+1}"
+                if len(error_line) > width:
+                    error_line = error_line[:width]
+                self.safe_addstr(line_y, x, error_line)
 
     def draw_mitm(self, y, x, width, height):
         """Нарисовать MITM панель"""
@@ -801,4 +984,3 @@ class TUI:
         self.stdscr.attron(curses.color_pair(8) | curses.A_BOLD)
         self.stdscr.addstr(y, 0, full_status.ljust(width))
         self.stdscr.attroff(curses.color_pair(8) | curses.A_BOLD)
-
