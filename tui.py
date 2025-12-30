@@ -38,6 +38,19 @@ class TUI:
         # Инициализация curses
         self.init_curses()
 
+        # Получить список интерфейсов
+        self.update_interfaces()
+
+    def update_interfaces(self):
+        """Обновить список интерфейсов"""
+        self.interfaces = get_network_interfaces()
+        if self.interfaces:
+            self.selected_interface = self.interfaces[0]
+        else:
+            # Если интерфейсы не найдены, показываем сообщение
+            self.interfaces = ["No interfaces found - check permissions"]
+            self.selected_interface = None
+
     def init_curses(self):
         """Инициализировать curses"""
         curses.curs_set(0)  # Скрыть курсор
@@ -110,11 +123,6 @@ class TUI:
 
     def run(self):
         """Запустить главный цикл TUI"""
-        # Получить список интерфейсов
-        self.interfaces = get_network_interfaces()
-        if self.interfaces:
-            self.selected_interface = self.interfaces[0]
-
         # Главный цикл
         while self.running:
             self.handle_input()
@@ -173,6 +181,10 @@ class TUI:
             # Старт/стоп сниффинга
             elif key == ord('s'):
                 self.toggle_sniffing()
+
+            # Обновить интерфейсы
+            elif key == ord('r'):
+                self.update_interfaces()
 
             # Очистка данных
             elif key == ord('c'):
@@ -441,6 +453,7 @@ class TUI:
         controls_y = y + len(info_lines) + 2
         controls = [
             "[S] Start/Stop sniffing",
+            "[R] Refresh interfaces",
             "[C] Clear data",
             "[E] Export to JSON",
             "[Q] Quit"
@@ -711,6 +724,7 @@ class TUI:
         lines.append(f"  Refresh Rate: {config.REFRESH_RATE}s")
 
         lines.append("")
+        lines.append("[R] Refresh interfaces list")
         lines.append("[↑↓] Select interface")
         lines.append("[Enter] Apply selection")
         lines.append("[Space] Apply selection")
@@ -767,7 +781,7 @@ class TUI:
         status = " | ".join(status_parts)
 
         # Добавляем клавиши управления
-        controls = "[Q]uit [1-6]Tabs [S]niff [↑↓]Nav [Enter]Select"
+        controls = "[Q]uit [1-6]Tabs [S]niff [R]efresh [↑↓]Nav [Enter]Select"
 
         # Формируем полную строку
         full_status = f" {status} | {controls} "
@@ -787,3 +801,4 @@ class TUI:
         self.stdscr.attron(curses.color_pair(8) | curses.A_BOLD)
         self.stdscr.addstr(y, 0, full_status.ljust(width))
         self.stdscr.attroff(curses.color_pair(8) | curses.A_BOLD)
+
