@@ -43,13 +43,29 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install windows-curses
         pip install pyinstaller
 
     - name: Build Windows Executable
       if: runner.os == 'Windows'
       run: |
-        pyinstaller --onefile --console --name "tui-traffic-analyzer" --add-data "config.py;." --add-data "DISCLAIMER.md;." main.py
+        pyinstaller --onefile --console --name "tui-traffic-analyzer" ^
+          --add-data "config.py;." ^
+          --add-data "DISCLAIMER.md;." ^
+          --add-data "LICENSE;." ^
+          --add-data "README.md;." ^
+          --hidden-import=_curses ^
+          --hidden-import=colorama ^
+          --hidden-import=scapy.all ^
+          --hidden-import=scapy.layers.http ^
+          --hidden-import=scapy.layers.dns ^
+          --hidden-import=scapy.layers.inet ^
+          --collect-all netifaces ^
+          --collect-all psutil ^
+          main.py
         mv dist/tui-traffic-analyzer.exe tui-traffic-analyzer-windows-x64.exe
+        echo "Windows build completed - executable size:"
+        dir dist\tui-traffic-analyzer.exe
 
     - name: Build Linux AppImage
       if: runner.os == 'Linux'
@@ -61,9 +77,22 @@ jobs:
         mkdir -p AppDir/usr/bin
         mkdir -p AppDir/usr/share/applications
 
-        pyinstaller --onefile main.py
+        pyinstaller --onefile --console --name "tui-traffic-analyzer" \
+          --add-data "config.py:." \
+          --add-data "DISCLAIMER.md:." \
+          --add-data "LICENSE:." \
+          --add-data "README.md:." \
+          --hidden-import=_curses \
+          --hidden-import=colorama \
+          --hidden-import=scapy.all \
+          --hidden-import=scapy.layers.http \
+          --hidden-import=scapy.layers.dns \
+          --hidden-import=scapy.layers.inet \
+          --collect-all netifaces \
+          --collect-all psutil \
+          main.py
 
-        cp dist/main AppDir/usr/bin/tui-traffic-analyzer
+        cp dist/tui-traffic-analyzer AppDir/usr/bin/tui-traffic-analyzer
 
         echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==" | base64 -d > AppDir/usr/bin/tui-traffic-analyzer.png
 
@@ -96,13 +125,26 @@ jobs:
     - name: Build DEB Package
       if: runner.os == 'Linux'
       run: |
-        pyinstaller --onefile main.py
+        pyinstaller --onefile --console --name "tui-traffic-analyzer" \
+          --add-data "config.py:." \
+          --add-data "DISCLAIMER.md:." \
+          --add-data "LICENSE:." \
+          --add-data "README.md:." \
+          --hidden-import=_curses \
+          --hidden-import=colorama \
+          --hidden-import=scapy.all \
+          --hidden-import=scapy.layers.http \
+          --hidden-import=scapy.layers.dns \
+          --hidden-import=scapy.layers.inet \
+          --collect-all netifaces \
+          --collect-all psutil \
+          main.py
 
         mkdir -p tui-traffic-analyzer/usr/bin
         mkdir -p tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer
         mkdir -p tui-traffic-analyzer/DEBIAN
 
-        cp dist/main tui-traffic-analyzer/usr/bin/tui-traffic-analyzer
+        cp dist/tui-traffic-analyzer tui-traffic-analyzer/usr/bin/tui-traffic-analyzer
         cp README.md tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || true
         cp LICENSE tui-traffic-analyzer/usr/share/doc/tui-traffic-analyzer/ || true
 
@@ -126,17 +168,30 @@ jobs:
     - name: Build RPM Package
       if: runner.os == 'Linux'
       run: |
-        pyinstaller --onefile main.py
+        pyinstaller --onefile --console --name "tui-traffic-analyzer" \
+          --add-data "config.py:." \
+          --add-data "DISCLAIMER.md:." \
+          --add-data "LICENSE:." \
+          --add-data "README.md:." \
+          --hidden-import=_curses \
+          --hidden-import=colorama \
+          --hidden-import=scapy.all \
+          --hidden-import=scapy.layers.http \
+          --hidden-import=scapy.layers.dns \
+          --hidden-import=scapy.layers.inet \
+          --collect-all netifaces \
+          --collect-all psutil \
+          main.py
 
-        if [ ! -f dist/main ]; then
-          echo "Error: dist/main not found"
+        if [ ! -f dist/tui-traffic-analyzer ]; then
+          echo "Error: dist/tui-traffic-analyzer not found"
           ls -la dist/
           exit 1
         fi
 
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS,BUILDROOT}
 
-        cp dist/main ~/rpmbuild/SOURCES/tui-traffic-analyzer
+        cp dist/tui-traffic-analyzer ~/rpmbuild/SOURCES/tui-traffic-analyzer
 
         cat > ~/rpmbuild/SPECS/tui-traffic-analyzer.spec << EOF
         Name: tui-traffic-analyzer
@@ -226,6 +281,7 @@ jobs:
         find artifacts -type f -name "*.deb" -exec cp {} release-files/ \; 2>/dev/null || true
         find artifacts -type f -name "*.rpm" -exec cp {} release-files/ \; 2>/dev/null || true
 
+        echo "Files to release:"
         ls -la release-files/
 
     - name: Create Release
