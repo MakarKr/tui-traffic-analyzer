@@ -12,7 +12,7 @@ from session_manager import Packet, PacketType, SessionManager
 from utils import format_bytes
 import re
 import platform
-import os
+import subprocess
 
 
 class PacketAnalyzer:
@@ -23,7 +23,6 @@ class PacketAnalyzer:
         self.current_interface = None
         self.packet_count = 0
         self.byte_count = 0
-        self.sniffer = None
 
     def start_sniffing(self, interface: str, filter_str: str = "tcp port 80 or tcp port 443 or udp port 53"):
         """Начать захват пакетов"""
@@ -44,15 +43,74 @@ class PacketAnalyzer:
                 if platform.system() == "Windows":
                     print("[*] Windows detected, adjusting sniffing parameters...")
 
-                    # Для Windows используем немного другие параметры
-                    sniff_kwargs = {
-                        'iface': interface,
-                        'filter': filter_str,
-                        'prn': self.process_packet,
-                        'store': 0,  # 0 вместо False для Windows
-                        'stop_filter': lambda x: not self.sniffing,
-                        'timeout': 1  # Добавляем таймаут для Windows
-                    }
+                    # Для Windows используем Npcap
+                    # Проверяем, установлен ли Npcap
+                    try:
+                        # Пробуем получить список интерфейсов через WinPcap/Npcap
+                        from scapy.arch.windows import get_windows_if_list
+                        ifaces = get_windows_if_list()
+                        print(f"[*] Available WinPcap/Npcap interfaces: {len(ifaces)}")
+                        for iface in ifaces:
+                            print(f"    - {iface['name']} ({iface['description']})")
+                    except Exception as e:
+                        print(f"[!] Cannot get WinPcap interfaces: {e}")
+                        print("[!] Make sure Npcap is installed: https://nmap.org/npcap/")
+
+                    # Для Ethernet на Windows может потребоваться специальный синтаксис
+                    # Преобразуем имя интерфейса в формат, понятный WinPcap
+                    if "Ethernet" in interface or "eth" in interface.lower():
+                        print(f"[*] Ethernet interface detected: {interface}")
+                        # Пробуем разные варианты
+                        interface_variants = [
+                            interface,  # Оригинальное имя
+                            f"\\Device\\NPF_{interface}",  # WinPcap формат
+                            interface.replace(" ", "_"),  # Без пробелов
+                            "Ethernet",  # Просто Ethernet
+                        ]
+
+                        for iface_var in interface_variants:
+                            try:
+                                print(f"[*] Trying interface: {iface_var}")
+                                sniff_kwargs = {
+                                    'iface': iface_var,
+                                    'filter': filter_str,
+                                    'prn': self.process_packet,
+                                    'store': 0,
+                                    'stop_filter': lambda x: not self.sniffing,
+                                    'timeout': 5
+                                }
+                                print(f"[*] Starting sniff with kwargs: {sniff_kwargs}")
+                                sniff(**sniff_kwargs)
+                                print(f"[*] Successfully started on {iface_var}")
+                                return
+                            except Exception as e:
+                                print(f"[!] Failed with {iface_var}: {e}")
+                                continue
+
+                        # Если все варианты не сработали, пробуем без указания интерфейса
+                        print("[*] Trying to sniff on all interfaces...")
+                        sniff_kwargs = {
+                            'filter': filter_str,
+                            'prn': self.process_packet,
+                            'store': 0,
+                            'stop_filter': lambda x: not self.sniffing,
+                            'timeout': 5
+                        }
+                        sniff(**sniff_kwargs)
+
+                    else:
+                        # Для других интерфейсов на Windows
+                        sniff_kwargs = {
+                            'iface': interface,
+                            'filter': filter_str,
+                            'prn': self.process_packet,
+                            'store': 0,
+                            'stop_filter': lambda x: not self.sniffing,
+                            'timeout': 5
+                        }
+                        print(f"[*] Starting sniff with kwargs: {sniff_kwargs}")
+                        sniff(**sniff_kwargs)
+
                 else:
                     # Для Linux/Unix
                     sniff_kwargs = {
@@ -62,23 +120,32 @@ class PacketAnalyzer:
                         'store': False,
                         'stop_filter': lambda x: not self.sniffing
                     }
+                    print(f"[*] Starting sniff with kwargs: {sniff_kwargs}")
+                    sniff(**sniff_kwargs)
 
-                # Запускаем сниффинг в отдельном потоке
                 print("[*] Sniffing started successfully!")
-                sniff(**sniff_kwargs)
 
             except Exception as e:
-                print(f"[!] Ошибка сниффинга: {e}")
-                print(f"[!] Тип ошибки: {type(e).__name__}")
+                print(f"[!] Error in sniffing: {e}")
+                print(f"[!] Error type: {type(e).__name__}")
                 import traceback
                 traceback.print_exc()
+
+                # Проверяем, установлен ли Npcap на Windows
+                if platform.system() == "Windows":
+                    print("\n[*] Troubleshooting steps for Windows:")
+                    print("    1. Install Npcap from https://nmap.org/npcap/")
+                    print("    2. During installation, check 'Install Npcap in WinPcap API-compatible Mode'")
+                    print("    3. Restart your computer after installation")
+                    print("    4. Run the program as Administrator")
+
                 self.sniffing = False
 
         self.sniff_thread = threading.Thread(target=sniff_task, daemon=True)
         self.sniff_thread.start()
 
         # Даем время на запуск
-        time.sleep(0.5)
+        time.sleep(1)
         return True
 
     def stop_sniffing(self):
@@ -88,7 +155,7 @@ class PacketAnalyzer:
 
         # Даем время на остановку
         if self.sniff_thread:
-            self.sniff_thread.join(timeout=2)
+            self.sniff_thread.join(timeout=3)
             print("[*] Sniffing stopped")
         return True
 
