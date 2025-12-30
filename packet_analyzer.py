@@ -11,6 +11,8 @@ from typing import Optional, Dict, Any
 from session_manager import Packet, PacketType, SessionManager
 from utils import format_bytes
 import re
+import platform
+import os
 
 
 class PacketAnalyzer:
@@ -21,6 +23,7 @@ class PacketAnalyzer:
         self.current_interface = None
         self.packet_count = 0
         self.byte_count = 0
+        self.sniffer = None
 
     def start_sniffing(self, interface: str, filter_str: str = "tcp port 80 or tcp port 443 or udp port 53"):
         """Начать захват пакетов"""
@@ -34,27 +37,59 @@ class PacketAnalyzer:
 
         def sniff_task():
             try:
-                sniff(
-                    iface=interface,
-                    filter=filter_str,
-                    prn=self.process_packet,
-                    store=False,
-                    stop_filter=lambda x: not self.sniffing
-                )
+                print(f"[*] Starting sniffing on interface: {interface}")
+                print(f"[*] Filter: {filter_str}")
+
+                # Проверяем платформу
+                if platform.system() == "Windows":
+                    print("[*] Windows detected, adjusting sniffing parameters...")
+
+                    # Для Windows используем немного другие параметры
+                    sniff_kwargs = {
+                        'iface': interface,
+                        'filter': filter_str,
+                        'prn': self.process_packet,
+                        'store': 0,  # 0 вместо False для Windows
+                        'stop_filter': lambda x: not self.sniffing,
+                        'timeout': 1  # Добавляем таймаут для Windows
+                    }
+                else:
+                    # Для Linux/Unix
+                    sniff_kwargs = {
+                        'iface': interface,
+                        'filter': filter_str,
+                        'prn': self.process_packet,
+                        'store': False,
+                        'stop_filter': lambda x: not self.sniffing
+                    }
+
+                # Запускаем сниффинг в отдельном потоке
+                print("[*] Sniffing started successfully!")
+                sniff(**sniff_kwargs)
+
             except Exception as e:
                 print(f"[!] Ошибка сниффинга: {e}")
+                print(f"[!] Тип ошибки: {type(e).__name__}")
+                import traceback
+                traceback.print_exc()
                 self.sniffing = False
 
         self.sniff_thread = threading.Thread(target=sniff_task, daemon=True)
         self.sniff_thread.start()
 
+        # Даем время на запуск
+        time.sleep(0.5)
         return True
 
     def stop_sniffing(self):
         """Остановить захват пакетов"""
+        print("[*] Stopping sniffing...")
         self.sniffing = False
+
+        # Даем время на остановку
         if self.sniff_thread:
             self.sniff_thread.join(timeout=2)
+            print("[*] Sniffing stopped")
         return True
 
     def process_packet(self, packet):
@@ -65,6 +100,10 @@ class PacketAnalyzer:
         try:
             self.packet_count += 1
             self.byte_count += len(packet)
+
+            # Периодически выводим статистику
+            if self.packet_count % 50 == 0:
+                print(f"[*] Packets captured: {self.packet_count}, Bytes: {format_bytes(self.byte_count)}")
 
             # Обработка HTTP
             if packet.haslayer(HTTPRequest):
@@ -90,7 +129,8 @@ class PacketAnalyzer:
 
         except Exception as e:
             # Игнорируем ошибки обработки пакетов
-            pass
+            if self.packet_count % 100 == 0:  # Логируем только каждую 100-ю ошибку
+                print(f"[!] Error processing packet {self.packet_count}: {e}")
 
     def extract_tls_info(self, packet):
         """Извлечение информации из TLS пакетов"""
