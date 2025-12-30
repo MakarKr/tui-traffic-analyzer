@@ -48,6 +48,7 @@ jobs:
 
     - name: Build Windows Executable
       if: runner.os == 'Windows'
+      shell: cmd
       run: |
         pyinstaller --onefile --console --name "tui-traffic-analyzer" ^
           --add-data "config.py;." ^
@@ -63,9 +64,9 @@ jobs:
           --collect-all netifaces ^
           --collect-all psutil ^
           main.py
-        mv dist/tui-traffic-analyzer.exe tui-traffic-analyzer-windows-x64.exe
-        echo "Windows build completed - executable size:"
-        dir dist\tui-traffic-analyzer.exe
+        move dist\tui-traffic-analyzer.exe tui-traffic-analyzer-windows-x64.exe
+        echo Windows build completed - executable size:
+        dir tui-traffic-analyzer-windows-x64.exe
 
     - name: Build Linux AppImage
       if: runner.os == 'Linux'
@@ -307,5 +308,5 @@ jobs:
         files: |
           release-files/tui-traffic-analyzer-windows-x64.exe
           release-files/tui-traffic-analyzer-linux-x86_64.AppImage
-          release-files/tui-traffic-analyzer-linux-amd64.deb
           release-files/tui-traffic-analyzer-linux-x86_64.rpm
+          release-files/tui-traffic-analyzer-linux-amd64.deb
