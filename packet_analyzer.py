@@ -7,12 +7,13 @@ from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import IP, TCP, UDP
 import threading
 import time
+import socket
+import struct
+import platform
 from typing import Optional, Dict, Any
 from session_manager import Packet, PacketType, SessionManager
 from utils import format_bytes
 import re
-import platform
-import subprocess
 
 
 class PacketAnalyzer:
@@ -23,6 +24,7 @@ class PacketAnalyzer:
         self.current_interface = None
         self.packet_count = 0
         self.byte_count = 0
+        self.socket_obj = None
 
     def start_sniffing(self, interface: str, filter_str: str = "tcp port 80 or tcp port 443 or udp port 53"):
         """Начать захват пакетов"""
@@ -39,80 +41,11 @@ class PacketAnalyzer:
                 print(f"[*] Starting sniffing on interface: {interface}")
                 print(f"[*] Filter: {filter_str}")
 
-                # Проверяем платформу
                 if platform.system() == "Windows":
-                    print("[*] Windows detected, adjusting sniffing parameters...")
-
-                    # Для Windows используем Npcap
-                    # Проверяем, установлен ли Npcap
-                    try:
-                        # Пробуем получить список интерфейсов через WinPcap/Npcap
-                        from scapy.arch.windows import get_windows_if_list
-                        ifaces = get_windows_if_list()
-                        print(f"[*] Available WinPcap/Npcap interfaces: {len(ifaces)}")
-                        for iface in ifaces:
-                            print(f"    - {iface['name']} ({iface['description']})")
-                    except Exception as e:
-                        print(f"[!] Cannot get WinPcap interfaces: {e}")
-                        print("[!] Make sure Npcap is installed: https://nmap.org/npcap/")
-
-                    # Для Ethernet на Windows может потребоваться специальный синтаксис
-                    # Преобразуем имя интерфейса в формат, понятный WinPcap
-                    if "Ethernet" in interface or "eth" in interface.lower():
-                        print(f"[*] Ethernet interface detected: {interface}")
-                        # Пробуем разные варианты
-                        interface_variants = [
-                            interface,  # Оригинальное имя
-                            f"\\Device\\NPF_{interface}",  # WinPcap формат
-                            interface.replace(" ", "_"),  # Без пробелов
-                            "Ethernet",  # Просто Ethernet
-                        ]
-
-                        for iface_var in interface_variants:
-                            try:
-                                print(f"[*] Trying interface: {iface_var}")
-                                sniff_kwargs = {
-                                    'iface': iface_var,
-                                    'filter': filter_str,
-                                    'prn': self.process_packet,
-                                    'store': 0,
-                                    'stop_filter': lambda x: not self.sniffing,
-                                    'timeout': 5
-                                }
-                                print(f"[*] Starting sniff with kwargs: {sniff_kwargs}")
-                                sniff(**sniff_kwargs)
-                                print(f"[*] Successfully started on {iface_var}")
-                                return
-                            except Exception as e:
-                                print(f"[!] Failed with {iface_var}: {e}")
-                                continue
-
-                        # Если все варианты не сработали, пробуем без указания интерфейса
-                        print("[*] Trying to sniff on all interfaces...")
-                        sniff_kwargs = {
-                            'filter': filter_str,
-                            'prn': self.process_packet,
-                            'store': 0,
-                            'stop_filter': lambda x: not self.sniffing,
-                            'timeout': 5
-                        }
-                        sniff(**sniff_kwargs)
-
-                    else:
-                        # Для других интерфейсов на Windows
-                        sniff_kwargs = {
-                            'iface': interface,
-                            'filter': filter_str,
-                            'prn': self.process_packet,
-                            'store': 0,
-                            'stop_filter': lambda x: not self.sniffing,
-                            'timeout': 5
-                        }
-                        print(f"[*] Starting sniff with kwargs: {sniff_kwargs}")
-                        sniff(**sniff_kwargs)
-
+                    # На Windows без Npcap используем сырые сокеты для анализа
+                    self._windows_raw_socket_sniff()
                 else:
-                    # Для Linux/Unix
+                    # На Linux используем стандартный сниффинг
                     sniff_kwargs = {
                         'iface': interface,
                         'filter': filter_str,
@@ -130,37 +63,375 @@ class PacketAnalyzer:
                 print(f"[!] Error type: {type(e).__name__}")
                 import traceback
                 traceback.print_exc()
-
-                # Проверяем, установлен ли Npcap на Windows
-                if platform.system() == "Windows":
-                    print("\n[*] Troubleshooting steps for Windows:")
-                    print("    1. Install Npcap from https://nmap.org/npcap/")
-                    print("    2. During installation, check 'Install Npcap in WinPcap API-compatible Mode'")
-                    print("    3. Restart your computer after installation")
-                    print("    4. Run the program as Administrator")
-
                 self.sniffing = False
 
         self.sniff_thread = threading.Thread(target=sniff_task, daemon=True)
         self.sniff_thread.start()
 
-        # Даем время на запуск
-        time.sleep(1)
+        time.sleep(0.5)
         return True
+
+    def _windows_raw_socket_sniff(self):
+        """Альтернативный метод сниффинга для Windows без Npcap"""
+        print("[*] Using raw socket method for Windows (limited functionality)")
+        print("[*] Note: This method can only analyze local traffic")
+
+        try:
+            # Создаем сырой сокет для перехвата TCP/UDP пакетов
+            self.socket_obj = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
+
+            # Биндим на все интерфейсы
+            self.socket_obj.bind(('0.0.0.0', 0))
+
+            # Включаем promiscuous mode
+            self.socket_obj.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+
+            while self.sniffing:
+                try:
+                    # Читаем пакет
+                    packet_data = self.socket_obj.recvfrom(65565)[0]
+
+                    # Парсим IP заголовок
+                    ip_header = packet_data[0:20]
+                    iph = struct.unpack('!BBHHHBBH4s4s', ip_header)
+
+                    version_ihl = iph[0]
+                    ihl = version_ihl & 0xF
+                    iph_length = ihl * 4
+
+                    protocol = iph[6]
+                    src_ip = socket.inet_ntoa(iph[8])
+                    dst_ip = socket.inet_ntoa(iph[9])
+
+                    # Обрабатываем TCP
+                    if protocol == 6:
+                        tcp_header = packet_data[iph_length:iph_length + 20]
+                        tcph = struct.unpack('!HHLLBBHHH', tcp_header)
+
+                        src_port = tcph[0]
+                        dst_port = tcph[1]
+                        data_offset = (tcph[4] >> 4) * 4
+
+                        # Извлекаем данные
+                        h_size = iph_length + data_offset
+                        data = packet_data[h_size:]
+
+                        # Создаем минимальный объект пакета для обработки
+                        class SimplePacket:
+                            def __init__(self):
+                                self.layers = []
+
+                            def haslayer(self, layer):
+                                return layer in self.layers
+
+                            def __len__(self):
+                                return len(packet_data)
+
+                        packet = SimplePacket()
+                        packet.layers = ['IP', 'TCP']
+                        packet[IP] = type('IP', (), {'src': src_ip, 'dst': dst_ip})()
+                        packet[TCP] = type('TCP', (), {
+                            'sport': src_port,
+                            'dport': dst_port,
+                            'flags': '',
+                            'seq': 0,
+                            'ack': 0
+                        })()
+
+                        # Добавляем Raw слой если есть данные
+                        if data:
+                            packet[Raw] = type('Raw', (), {'load': data})()
+                            packet.layers.append('Raw')
+
+                        # Обрабатываем HTTP/HTTPS
+                        if dst_port == 80 or src_port == 80:
+                            packet.layers.append('HTTP')
+                            self._process_simple_http(packet, src_ip, dst_ip, src_port, dst_port, data)
+                        elif dst_port == 443 or src_port == 443:
+                            packet.layers.append('TLS')
+                            self._process_simple_https(packet, src_ip, dst_ip, src_port, dst_port)
+                        else:
+                            self._process_simple_tcp(packet, src_ip, dst_ip, src_port, dst_port)
+
+                        self.packet_count += 1
+                        self.byte_count += len(packet_data)
+
+                    # Обрабатываем UDP
+                    elif protocol == 17:
+                        udp_header = packet_data[iph_length:iph_length + 8]
+                        udph = struct.unpack('!HHHH', udp_header)
+
+                        src_port = udph[0]
+                        dst_port = udph[1]
+                        udp_length = udph[2]
+
+                        data = packet_data[iph_length + 8:iph_length + udp_length]
+
+                        packet = SimplePacket()
+                        packet.layers = ['IP', 'UDP']
+                        packet[IP] = type('IP', (), {'src': src_ip, 'dst': dst_ip})()
+                        packet[UDP] = type('UDP', (), {
+                            'sport': src_port,
+                            'dport': dst_port
+                        })()
+
+                        if data:
+                            packet[Raw] = type('Raw', (), {'load': data})()
+                            packet.layers.append('Raw')
+
+                        # Обрабатываем DNS
+                        if dst_port == 53 or src_port == 53:
+                            packet.layers.append('DNS')
+                            self._process_simple_dns(packet, src_ip, dst_ip, src_port, dst_port, data)
+                        else:
+                            self._process_simple_udp(packet, src_ip, dst_ip, src_port, dst_port)
+
+                        self.packet_count += 1
+                        self.byte_count += len(packet_data)
+
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.packet_count % 100 == 0:
+                        print(f"[!] Error processing raw packet: {e}")
+                    continue
+
+        except Exception as e:
+            print(f"[!] Raw socket error: {e}")
+            self.sniffing = False
+        finally:
+            if self.socket_obj:
+                try:
+                    self.socket_obj.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+                    self.socket_obj.close()
+                except:
+                    pass
+
+    def _process_simple_http(self, packet, src_ip, dst_ip, src_port, dst_port, data):
+        """Обработать простой HTTP пакет"""
+        try:
+            if data:
+                data_str = data.decode('utf-8', errors='ignore').lower()
+
+                # Определяем тип HTTP пакета
+                if data_str.startswith(('get ', 'post ', 'put ', 'delete ', 'head ', 'options ')):
+                    # HTTP запрос
+                    lines = data_str.split('\r\n')
+                    if lines:
+                        method_line = lines[0].split()
+                        if len(method_line) >= 2:
+                            method = method_line[0].upper()
+                            path = method_line[1]
+
+                            # Извлекаем хост
+                            host = "Unknown"
+                            for line in lines[1:]:
+                                if line.startswith('host:'):
+                                    host = line.split(':', 1)[1].strip()
+                                    break
+
+                            packet_obj = Packet(
+                                timestamp=time.time(),
+                                src_ip=src_ip,
+                                dst_ip=dst_ip,
+                                src_port=src_port,
+                                dst_port=dst_port,
+                                protocol="HTTP",
+                                packet_type=PacketType.HTTP_REQUEST,
+                                size=len(data),
+                                data={
+                                    "method": method,
+                                    "url": f"http://{host}{path}",
+                                    "host": host,
+                                    "path": path,
+                                    "headers": {},
+                                    "version": "HTTP/1.1"
+                                },
+                                session_id=f"http-{src_ip}:{src_port}-{dst_ip}:{dst_port}"
+                            )
+                            self.session_manager.add_packet(packet_obj)
+
+                elif data_str.startswith('http/'):
+                    # HTTP ответ
+                    lines = data_str.split('\r\n')
+                    if lines:
+                        status_line = lines[0].split()
+                        if len(status_line) >= 2:
+                            status_code = status_line[1]
+
+                            packet_obj = Packet(
+                                timestamp=time.time(),
+                                src_ip=src_ip,
+                                dst_ip=dst_ip,
+                                src_port=src_port,
+                                dst_port=dst_port,
+                                protocol="HTTP",
+                                packet_type=PacketType.HTTP_RESPONSE,
+                                size=len(data),
+                                data={
+                                    "status_code": status_code,
+                                    "reason_phrase": " ".join(status_line[2:]),
+                                    "headers": {},
+                                    "content_length": "Unknown"
+                                },
+                                session_id=f"http-{dst_ip}:{dst_port}-{src_ip}:{src_port}"
+                            )
+                            self.session_manager.add_packet(packet_obj)
+
+        except Exception as e:
+            pass
+
+    def _process_simple_https(self, packet, src_ip, dst_ip, src_port, dst_port):
+        """Обработать простой HTTPS пакет"""
+        try:
+            # Определяем направление
+            if dst_port == 443:  # Клиент -> Сервер
+                direction = "client->server"
+                client_ip = src_ip
+                server_ip = dst_ip
+                client_port = src_port
+                server_port = dst_port
+            else:  # Сервер -> Клиент
+                direction = "server->client"
+                client_ip = dst_ip
+                server_ip = src_ip
+                client_port = dst_port
+                server_port = src_port
+
+            packet_obj = Packet(
+                timestamp=time.time(),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                src_port=src_port,
+                dst_port=dst_port,
+                protocol="HTTPS",
+                packet_type=PacketType.HTTPS_SESSION,
+                size=1500,  # Примерный размер
+                data={
+                    "direction": direction,
+                    "client_ip": client_ip,
+                    "server_ip": server_ip,
+                    "tls_type": "Encrypted",
+                    "tcp_flags": "",
+                    "seq": 0,
+                    "ack": 0
+                },
+                session_id=f"https-{client_ip}:{client_port}-{server_ip}:{server_port}"
+            )
+            self.session_manager.add_packet(packet_obj)
+
+        except Exception as e:
+            pass
+
+    def _process_simple_dns(self, packet, src_ip, dst_ip, src_port, dst_port, data):
+        """Обработать простой DNS пакет"""
+        try:
+            if data and len(data) > 12:
+                # Парсим DNS заголовок
+                transaction_id = data[0:2]
+                flags = data[2:4]
+                qr = (flags[0] >> 7) & 0x1
+
+                if qr == 0:  # DNS запрос
+                    packet_type = PacketType.DNS_QUERY
+                    # Извлекаем доменное имя (упрощенно)
+                    domain_parts = []
+                    pos = 12
+                    while pos < len(data) and data[pos] != 0:
+                        length = data[pos]
+                        pos += 1
+                        if pos + length <= len(data):
+                            domain_parts.append(data[pos:pos+length].decode('utf-8', errors='ignore'))
+                            pos += length
+
+                    domain = '.'.join(domain_parts)
+
+                    data_dict = {"queries": [{"qname": domain, "qtype": "A"}]}
+                else:  # DNS ответ
+                    packet_type = PacketType.DNS_RESPONSE
+                    data_dict = {"answers": [{"rrname": "unknown", "type": "A", "rdata": "unknown"}]}
+
+                packet_obj = Packet(
+                    timestamp=time.time(),
+                    src_ip=src_ip,
+                    dst_ip=dst_ip,
+                    src_port=src_port,
+                    dst_port=dst_port,
+                    protocol="DNS",
+                    packet_type=packet_type,
+                    size=len(data),
+                    data=data_dict
+                )
+                self.session_manager.add_packet(packet_obj)
+
+        except Exception as e:
+            pass
+
+    def _process_simple_tcp(self, packet, src_ip, dst_ip, src_port, dst_port):
+        """Обработать простой TCP пакет"""
+        try:
+            packet_obj = Packet(
+                timestamp=time.time(),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                src_port=src_port,
+                dst_port=dst_port,
+                protocol="TCP",
+                packet_type=PacketType.TCP_CONNECTION,
+                size=1500,
+                data={
+                    "flags": "",
+                    "seq": 0,
+                    "ack": 0,
+                    "window": 0,
+                    "payload_size": 0
+                },
+                session_id=f"tcp-{src_ip}:{src_port}-{dst_ip}:{dst_port}"
+            )
+            self.session_manager.add_packet(packet_obj)
+        except Exception as e:
+            pass
+
+    def _process_simple_udp(self, packet, src_ip, dst_ip, src_port, dst_port):
+        """Обработать простой UDP пакет"""
+        try:
+            packet_obj = Packet(
+                timestamp=time.time(),
+                src_ip=src_ip,
+                dst_ip=dst_ip,
+                src_port=src_port,
+                dst_port=dst_port,
+                protocol="UDP",
+                packet_type=PacketType.UDP_SESSION,
+                size=1500,
+                data={
+                    "payload_size": 0
+                },
+                session_id=f"udp-{src_ip}:{src_port}-{dst_ip}:{dst_port}"
+            )
+            self.session_manager.add_packet(packet_obj)
+        except Exception as e:
+            pass
 
     def stop_sniffing(self):
         """Остановить захват пакетов"""
         print("[*] Stopping sniffing...")
         self.sniffing = False
 
-        # Даем время на остановку
+        if platform.system() == "Windows" and self.socket_obj:
+            try:
+                self.socket_obj.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+                self.socket_obj.close()
+            except:
+                pass
+
         if self.sniff_thread:
-            self.sniff_thread.join(timeout=3)
+            self.sniff_thread.join(timeout=2)
             print("[*] Sniffing stopped")
         return True
 
     def process_packet(self, packet):
-        """Обработать захваченный пакет"""
+        """Обработать захваченный пакет (оригинальный метод для Linux)"""
         if not self.sniffing or not packet.haslayer(IP):
             return
 
@@ -195,9 +466,12 @@ class PacketAnalyzer:
                 self._process_udp_session(packet)
 
         except Exception as e:
-            # Игнорируем ошибки обработки пакетов
-            if self.packet_count % 100 == 0:  # Логируем только каждую 100-ю ошибку
+            if self.packet_count % 100 == 0:
                 print(f"[!] Error processing packet {self.packet_count}: {e}")
+
+    # Остальные методы остаются без изменений (extract_tls_info, detect_ssl_vulnerabilities,
+    # _process_http_request, _process_http_response, _process_https_metadata,
+    # _process_dns, _process_tcp_connection, _process_udp_session)
 
     def extract_tls_info(self, packet):
         """Извлечение информации из TLS пакетов"""
@@ -229,7 +503,7 @@ class PacketAnalyzer:
                 if packet.haslayer('TLSCipherSuites'):
                     ciphers = packet['TLSCipherSuites'].get_field_val('ciphers', [])
                     if ciphers:
-                        tls_info['ciphers'] = [str(c) for c in ciphers[:5]]  # Только первые 5
+                        tls_info['ciphers'] = [str(c) for c in ciphers[:5]]
 
             # Альтернативный метод для извлечения SNI из сырых данных
             elif packet.haslayer(Raw):
@@ -238,7 +512,6 @@ class PacketAnalyzer:
                 # Поиск SNI в Client Hello
                 if b'\x00\x00' in raw_data and b'\x00\x16' in raw_data:
                     try:
-                        # Простая эвристика для поиска SNI
                         sni_start = raw_data.find(b'\x00\x00')
                         if sni_start != -1 and sni_start + 5 < len(raw_data):
                             sni_len = int.from_bytes(raw_data[sni_start + 3:sni_start + 5], 'big')
@@ -256,7 +529,6 @@ class PacketAnalyzer:
                         break
 
         except Exception as e:
-            # В случае ошибки просто возвращаем пустой словарь
             pass
 
         return tls_info
@@ -283,7 +555,6 @@ class PacketAnalyzer:
             # Проверка сертификата
             cert_info = tls_info.get('certificate', {})
             if cert_info:
-                # Проверка срока действия (простая проверка)
                 validity = cert_info.get('validity', '')
                 if 'expired' in str(validity).lower():
                     vulnerabilities.append('Expired certificate')
@@ -307,14 +578,12 @@ class PacketAnalyzer:
         path = http.Path.decode() if http.Path else "/"
         method = http.Method.decode() if http.Method else "UNKNOWN"
 
-        # Извлекаем заголовки
         headers = {}
         if hasattr(http, 'fields'):
             for field, value in http.fields.items():
                 if value:
                     headers[field] = value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else str(value)
 
-        # Извлекаем POST данные
         post_data = None
         if method == "POST" and packet.haslayer(Raw):
             raw_data = packet[Raw].load
@@ -325,7 +594,6 @@ class PacketAnalyzer:
             except:
                 post_data = raw_data.hex()[:200] + "..." if len(raw_data) > 100 else raw_data.hex()
 
-        # Создаем пакет
         packet_obj = Packet(
             timestamp=time.time(),
             src_ip=ip_layer.src,
@@ -355,7 +623,6 @@ class PacketAnalyzer:
         ip_layer = packet[IP]
         tcp_layer = packet[TCP]
 
-        # Извлекаем статус и заголовки
         status_code = None
         reason_phrase = None
         headers = {}
@@ -375,7 +642,6 @@ class PacketAnalyzer:
                 if value:
                     headers[field] = value.decode('utf-8', errors='ignore') if isinstance(value, bytes) else str(value)
 
-        # Извлекаем тело ответа
         response_body = None
         if packet.haslayer(Raw):
             raw_data = packet[Raw].load
@@ -384,10 +650,8 @@ class PacketAnalyzer:
                 if len(response_body) > 1000:
                     response_body = response_body[:1000] + "..."
 
-                # Пытаемся определить Content-Type
                 content_type = headers.get('Content-Type', '')
                 if 'html' in content_type.lower():
-                    # Извлекаем title страницы
                     title_match = re.search(r'<title>(.*?)</title>', response_body, re.IGNORECASE)
                     if title_match:
                         headers['_page_title'] = title_match.group(1)
@@ -421,32 +685,28 @@ class PacketAnalyzer:
         ip_layer = packet[IP]
         tcp_layer = packet[TCP]
 
-        # Определяем направление
-        if tcp_layer.dport == 443:  # Клиент -> Сервер
+        if tcp_layer.dport == 443:
             direction = "client->server"
             client_ip = ip_layer.src
             server_ip = ip_layer.dst
             client_port = tcp_layer.sport
             server_port = tcp_layer.dport
-        else:  # Сервер -> Клиент
+        else:
             direction = "server->client"
             client_ip = ip_layer.dst
             server_ip = ip_layer.src
             client_port = tcp_layer.dport
             server_port = tcp_layer.sport
 
-        # Извлекаем TLS информацию
         tls_info = self.extract_tls_info(packet)
         vulnerabilities = self.detect_ssl_vulnerabilities(tls_info)
 
-        # Определяем тип TLS пакета
         tls_type = "Unknown"
         if packet.haslayer(Raw):
             raw_data = packet[Raw].load
             if len(raw_data) > 0:
-                # Первый байт указывает тип TLS записи
                 first_byte = raw_data[0]
-                if first_byte == 22:  # Handshake
+                if first_byte == 22:
                     if len(raw_data) > 5:
                         handshake_type = raw_data[5]
                         if handshake_type == 1:
@@ -464,7 +724,6 @@ class PacketAnalyzer:
                 elif first_byte == 21:
                     tls_type = "Alert"
 
-        # Добавляем TLS информацию в данные пакета
         data = {
             "direction": direction,
             "client_ip": client_ip,
@@ -475,11 +734,9 @@ class PacketAnalyzer:
             "ack": tcp_layer.ack
         }
 
-        # Добавляем TLS информацию, если есть
         if tls_info:
             data.update(tls_info)
 
-        # Добавляем информацию об уязвимостях
         if vulnerabilities:
             data['vulnerabilities'] = vulnerabilities
 
@@ -503,7 +760,7 @@ class PacketAnalyzer:
         dns = packet[DNS]
         ip_layer = packet[IP]
 
-        if dns.qr == 0:  # DNS запрос
+        if dns.qr == 0:
             packet_type = PacketType.DNS_QUERY
             data = {"queries": []}
             if dns.haslayer(DNSQR):
@@ -514,7 +771,7 @@ class PacketAnalyzer:
                             query.qname),
                         "qtype": query.qtype
                     })
-        else:  # DNS ответ
+        else:
             packet_type = PacketType.DNS_RESPONSE
             data = {"answers": []}
             if dns.haslayer(DNSRR):
@@ -529,7 +786,6 @@ class PacketAnalyzer:
                             answer.rdata)
                     })
 
-        # Определяем транспортный протокол
         if packet.haslayer(UDP):
             transport = "UDP"
             src_port = packet[UDP].sport
@@ -558,7 +814,6 @@ class PacketAnalyzer:
         ip_layer = packet[IP]
         tcp_layer = packet[TCP]
 
-        # Пропускаем HTTP/HTTPS/DNS, т.к. они обрабатываются отдельно
         if tcp_layer.dport in [80, 443, 53] or tcp_layer.sport in [80, 443, 53]:
             return
 
@@ -588,7 +843,6 @@ class PacketAnalyzer:
         ip_layer = packet[IP]
         udp_layer = packet[UDP]
 
-        # Пропускаем DNS
         if udp_layer.dport == 53 or udp_layer.sport == 53:
             return
 

