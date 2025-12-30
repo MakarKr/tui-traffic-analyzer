@@ -8,6 +8,7 @@ import time
 from tui import TUI
 from utils import check_root, clear_screen
 from colorama import init, Fore
+import platform
 
 # Добавляем путь к директории скрипта для корректной работы PyInstaller
 if getattr(sys, 'frozen', False):
@@ -27,7 +28,7 @@ def enable_https_decryption():
     print("\n" + "=" * 60)
     print("HTTPS Traffic Analysis Limitations:")
     print("=" * 60)
-    print("1. FULL decryption of HTTPS/TLS is NOT POSSILABLE without:")
+    print("1. FULL decryption of HTTPS/TLS is NOT POSSIBLE without:")
     print("   - Server's private key")
     print("   - Client's browser configuration")
     print("   - Pre-shared keys")
@@ -38,6 +39,32 @@ def enable_https_decryption():
     print("   - Data volumes and timing")
     print("\n3. For educational purposes only!")
     print("=" * 60)
+
+
+def windows_compatibility_info():
+    """Информация о совместимости с Windows"""
+    if platform.system() == "Windows":
+        print("\n" + "=" * 60)
+        print("WINDOWS COMPATIBILITY INFORMATION:")
+        print("=" * 60)
+        print("Packet capture on Windows:")
+        print("\n1. WITH Npcap/WinPcap (recommended):")
+        print("   - Full packet capture functionality")
+        print("   - Install from: https://nmap.org/npcap/")
+        print("   - Select 'WinPcap API-compatible mode' during installation")
+        print("   - Restart computer after installation")
+
+        print("\n2. WITHOUT Npcap (limited functionality):")
+        print("   - Only local traffic analysis")
+        print("   - Basic HTTP/HTTPS/DNS detection")
+        print("   - Demo mode available")
+
+        print("\n3. MITM attacks on Windows:")
+        print("   - Require Npcap for ARP spoofing")
+        print("   - Limited without additional drivers")
+
+        print("\nThe program will automatically detect Npcap.")
+        print("=" * 60)
 
 
 def license_warning():
@@ -57,6 +84,9 @@ def main():
 
     # Показываем предупреждение о HTTPS
     enable_https_decryption()
+
+    # Показываем информацию о совместимости с Windows
+    windows_compatibility_info()
 
     # Показываем предупреждение о лицензии
     license_warning()
