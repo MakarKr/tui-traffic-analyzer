@@ -4,6 +4,7 @@
 import curses
 import time
 import threading
+import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 from utils import get_network_interfaces, get_interface_info, clear_screen, format_bytes, format_time_delta
@@ -35,6 +36,17 @@ class TUI:
         self.selected_interface = None
         self.scan_results = []
 
+        # Флаги состояния
+        self.exporting = False
+        self.export_status = ""
+        self.export_filename = ""
+        self.export_progress = 0
+        self.export_total = 0
+
+        # Детальная информация о пакете
+        self.selected_packet_detail = None
+        self.show_packet_detail = False
+
         # Инициализация curses
         self.init_curses()
 
@@ -46,6 +58,8 @@ class TUI:
         self.interfaces = get_network_interfaces()
         if self.interfaces:
             self.selected_interface = self.interfaces[0]
+            # Обновляем текущий интерфейс в анализаторе
+            self.packet_analyzer.current_interface = self.selected_interface
         else:
             # Если интерфейсы не найдены, показываем сообщение
             self.interfaces = ["No interfaces found - check permissions"]
@@ -70,6 +84,8 @@ class TUI:
         curses.init_pair(6, curses.COLOR_BLUE, -1)  # Выделение
         curses.init_pair(7, curses.COLOR_WHITE, curses.COLOR_BLUE)  # Выбранный элемент
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Статус бар
+        curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Экспорт успех
+        curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_RED)  # Экспорт ошибка
 
     def sanitize_string(self, text):
         """Очистить строку от нулевых и непечатаемых символов"""
@@ -205,37 +221,56 @@ class TUI:
         try:
             key = self.stdscr.getch()
 
-            if key == ord('q'):
+            if key == ord('q') or key == 27:  # 'q' или ESC
                 self.running = False
                 return
 
-            # Навигация по табам
-            elif key == ord('1'):
+            # Если показываем детали пакета, обрабатываем только ESC и Enter
+            if self.show_packet_detail and self.selected_packet_detail:
+                if key == ord('\n') or key == ord('\r') or key == ord(' ') or key == 27:
+                    self.show_packet_detail = False
+                    self.selected_packet_detail = None
+                return
+
+            # Навигация по табам (всегда доступна, даже во время экспорта)
+            if key == ord('1'):
                 self.current_tab = "dashboard"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
             elif key == ord('2'):
                 self.current_tab = "packets"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
             elif key == ord('3'):
                 self.current_tab = "sessions"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
             elif key == ord('4'):
                 self.current_tab = "mitm"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
             elif key == ord('5'):
                 self.current_tab = "scanner"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
             elif key == ord('6'):
                 self.current_tab = "settings"
                 self.selected_row = 0
                 self.scroll_offset = 0
+                self.show_packet_detail = False
+                self.selected_packet_detail = None
 
-            # Навигация в текущем табе (работает везде)
+            # Навигация в текущем табе (работает везде, кроме экспорта)
             elif key == curses.KEY_UP:
                 self.handle_up()
             elif key == curses.KEY_DOWN:
@@ -246,7 +281,7 @@ class TUI:
                 self.handle_right()
 
             # Действия в зависимости от таба
-            elif key == ord('\n') or key == ord(' ') or key == ord('\r'):
+            elif key == ord('\n') or key == ord('\r') or key == ord(' '):
                 self.handle_enter()
 
             # Старт/стоп сниффинга
@@ -261,10 +296,17 @@ class TUI:
             elif key == ord('c'):
                 self.session_manager.clear_all()
 
-            # Экспорт данных
+            # Экспорт данных (работает даже во время экспорта для отмены)
             elif key == ord('e'):
-                filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                self.session_manager.export_to_json(filename)
+                if self.exporting:
+                    # Если экспорт уже идет, показываем статус
+                    self.export_status = "Export already in progress..."
+                else:
+                    self.start_export()
+
+            # Показать детали выбранного пакета
+            elif key == ord('d'):
+                self.show_packet_details()
 
         except Exception as e:
             pass
@@ -275,11 +317,16 @@ class TUI:
             packets = self.session_manager.get_packets(limit=1000)
             if packets:
                 self.selected_row = max(0, self.selected_row - 1)
+                # Автопрокрутка для видимости выбранной строки
+                if self.selected_row < self.scroll_offset:
+                    self.scroll_offset = max(0, self.selected_row)
 
         elif self.current_tab == "sessions":
             sessions = self.session_manager.get_sessions(limit=1000)
             if sessions:
                 self.selected_row = max(0, self.selected_row - 1)
+                if self.selected_row < self.scroll_offset:
+                    self.scroll_offset = max(0, self.selected_row)
 
         elif self.current_tab == "scanner":
             # В сканере есть выбор хоста
@@ -306,6 +353,10 @@ class TUI:
                 max_rows = len(packets) - 1
                 if self.selected_row < max_rows:
                     self.selected_row += 1
+                    # Автопрокрутка для видимости выбранной строки
+                    # Предполагаем, что высота видимой области около 20 строк
+                    if self.selected_row >= self.scroll_offset + 15:
+                        self.scroll_offset = min(max_rows - 14, self.selected_row - 14)
 
         elif self.current_tab == "sessions":
             sessions = self.session_manager.get_sessions(limit=1000)
@@ -313,6 +364,8 @@ class TUI:
                 max_rows = len(sessions) - 1
                 if self.selected_row < max_rows:
                     self.selected_row += 1
+                    if self.selected_row >= self.scroll_offset + 15:
+                        self.scroll_offset = min(max_rows - 14, self.selected_row - 14)
 
         elif self.current_tab == "scanner":
             # В сканере: 0=Start scan, 1=Stop scan, далее результаты
@@ -364,19 +417,24 @@ class TUI:
                 host_index = self.selected_row - 2
                 if 0 <= host_index < len(self.scan_results):
                     selected_host = self.scan_results[host_index]
-                    print(f"Selected host: {selected_host['ip']} ({selected_host['mac']})")
                     # Здесь можно добавить логику для использования выбранного хоста
+                    pass
 
         elif self.current_tab == "settings":
             # Выбор интерфейса
             if 0 <= self.selected_row < len(self.interfaces):
                 self.selected_interface = self.interfaces[self.selected_row]
-                print(f"Selected interface: {self.selected_interface}")
+                # Обновляем текущий интерфейс в анализаторе
+                self.packet_analyzer.current_interface = self.selected_interface
                 # Перезапускаем сниффинг если он активен
                 if self.packet_analyzer.sniffing:
                     self.packet_analyzer.stop_sniffing()
                     time.sleep(0.5)
                     self.packet_analyzer.start_sniffing(self.selected_interface)
+
+        elif self.current_tab == "packets":
+            # Показать детали выбранного пакета
+            self.show_packet_details()
 
     def toggle_sniffing(self):
         """Включить/выключить сниффинг"""
@@ -417,10 +475,68 @@ class TUI:
         """Обработчик завершения сканирования"""
         self.scan_results = results
 
+    def start_export(self):
+        """Начать экспорт данных в отдельном потоке"""
+        if self.exporting:
+            return
+
+        self.exporting = True
+        self.export_status = "Starting export..."
+        self.export_filename = f"export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+        # Запускаем экспорт в отдельном потоке
+        export_thread = threading.Thread(target=self.export_data, daemon=True)
+        export_thread.start()
+
+    def export_data(self):
+        """Экспорт данных в фоновом режиме"""
+        try:
+            # Получаем статистику для оценки прогресса
+            stats = self.session_manager.get_statistics()
+            total_packets = stats.get("total_packets", 0)
+
+            if total_packets == 0:
+                self.export_status = "No data to export"
+                time.sleep(2)
+                self.exporting = False
+                return
+
+            self.export_status = f"Exporting {total_packets} packets..."
+
+            # Экспортируем данные
+            self.session_manager.export_to_json(self.export_filename)
+
+            # Успешный экспорт
+            self.export_status = f"Exported to {self.export_filename}"
+
+            # Через 3 секунды очищаем статус
+            time.sleep(3)
+            self.export_status = ""
+
+        except Exception as e:
+            self.export_status = f"Export failed: {str(e)[:50]}"
+            time.sleep(3)
+            self.export_status = ""
+        finally:
+            self.exporting = False
+
+    def show_packet_details(self):
+        """Показать детали выбранного пакета"""
+        if self.current_tab == "packets":
+            packets = self.session_manager.get_packets(limit=1000)
+            if 0 <= self.selected_row < len(packets):
+                self.selected_packet_detail = packets[self.selected_row]
+                self.show_packet_detail = True
+
     def draw(self):
         """Нарисовать интерфейс"""
         self.stdscr.clear()
         height, width = self.stdscr.getmaxyx()
+
+        # Если показываем детали пакета, рисуем их
+        if self.show_packet_detail and self.selected_packet_detail:
+            self.draw_packet_detail(0, 0, width, height)
+            return
 
         # Рисуем заголовок
         self.draw_header(width)
@@ -497,16 +613,22 @@ class TUI:
         stats = self.session_manager.get_statistics()
         analyzer_stats = self.packet_analyzer.get_statistics()
 
+        # Определяем интерфейс для отображения
+        interface_display = self.selected_interface or "None"
+        if analyzer_stats.get('interface'):
+            interface_display = analyzer_stats['interface']
+
         # Общая информация
         info_lines = [
             f"Status: {'SNIFFING' if analyzer_stats['sniffing'] else 'IDLE'}",
-            f"Interface: {analyzer_stats['interface'] or 'None'}",
+            f"Interface: {interface_display}",
             f"Packets captured: {stats['total_packets']}",
             f"Bytes captured: {format_bytes(stats['total_bytes'])}",
             f"Sessions: {stats['total_sessions']}",
             f"HTTP Requests: {stats['http_requests']}",
             f"HTTP Responses: {stats['http_responses']}",
             f"HTTPS Sessions: {stats['https_sessions']}",
+            f"DNS Queries: {stats.get('dns_queries', 0)}",
             "",
             "Protocol Distribution:"
         ]
@@ -527,6 +649,7 @@ class TUI:
             "[R] Refresh interfaces",
             "[C] Clear data",
             "[E] Export to JSON",
+            "[D] Show packet details",
             "[Q] Quit"
         ]
 
@@ -538,10 +661,11 @@ class TUI:
 
     def draw_packets(self, y, x, width, height):
         """Нарисовать список пакетов"""
-        packets = self.session_manager.get_packets(limit=height)
+        packets = self.session_manager.get_packets(limit=height * 2)  # Берем больше для прокрутки
 
         if not packets:
             self.safe_addstr(y, x, "No packets captured yet")
+            self.safe_addstr(y + 1, x, "Press 'S' to start sniffing")
             return
 
         # Конфигурация столбцов для пакетов
@@ -590,12 +714,18 @@ class TUI:
         self.safe_addstr(y, x, header[:width])
         self.stdscr.attroff(curses.A_BOLD)
 
+        # Ограничиваем отображаемые пакеты с учётом прокрутки
+        start_idx = self.scroll_offset
+        end_idx = min(start_idx + height - 1, len(packets))
+
         # Пакеты
-        for i, packet in enumerate(packets):
-            line_y = y + 1 + i
+        for display_idx, packet_idx in enumerate(range(start_idx, end_idx)):
+            line_y = y + 1 + display_idx
 
             if line_y >= height + 3:
                 break
+
+            packet = packets[packet_idx]
 
             # Форматируем время
             timestamp = datetime.fromtimestamp(packet.timestamp).strftime('%H:%M:%S')
@@ -673,26 +803,26 @@ class TUI:
                     color = curses.color_pair(6)  # Синий
 
                 # Выделяем выбранную строку
-                if i == self.selected_row and self.current_tab == "packets":
+                if packet_idx == self.selected_row and self.current_tab == "packets":
                     self.stdscr.attron(curses.color_pair(7) | curses.A_BOLD)
 
                 self.stdscr.attron(color)
                 self.safe_addstr(line_y, x, line)
                 self.stdscr.attroff(color)
 
-                if i == self.selected_row and self.current_tab == "packets":
+                if packet_idx == self.selected_row and self.current_tab == "packets":
                     self.stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
 
             except Exception as e:
                 # В случае ошибки показываем упрощённую строку
-                error_line = f"Packet {i+1}"
+                error_line = f"Packet {packet_idx+1}"
                 if len(error_line) > width:
                     error_line = error_line[:width]
                 self.safe_addstr(line_y, x, error_line)
 
     def draw_sessions(self, y, x, width, height):
         """Нарисовать список сессий"""
-        sessions = self.session_manager.get_sessions(limit=height)
+        sessions = self.session_manager.get_sessions(limit=height * 2)
 
         if not sessions:
             self.safe_addstr(y, x, "No sessions yet")
@@ -744,12 +874,18 @@ class TUI:
         self.safe_addstr(y, x, header[:width])
         self.stdscr.attroff(curses.A_BOLD)
 
+        # Ограничиваем отображаемые сессии с учётом прокрутки
+        start_idx = self.scroll_offset
+        end_idx = min(start_idx + height - 1, len(sessions))
+
         # Сессии
-        for i, session in enumerate(sessions):
-            line_y = y + 1 + i
+        for display_idx, session_idx in enumerate(range(start_idx, end_idx)):
+            line_y = y + 1 + display_idx
 
             if line_y >= height + 3:
                 break
+
+            session = sessions[session_idx]
 
             # Укорачиваем ID
             session_id = session.session_id
@@ -777,16 +913,16 @@ class TUI:
                     line = line[:width]
 
                 # Выделяем выбранную строку
-                if i == self.selected_row and self.current_tab == "sessions":
+                if session_idx == self.selected_row and self.current_tab == "sessions":
                     self.stdscr.attron(curses.color_pair(7))
 
                 self.safe_addstr(line_y, x, line)
 
-                if i == self.selected_row and self.current_tab == "sessions":
+                if session_idx == self.selected_row and self.current_tab == "sessions":
                     self.stdscr.attroff(curses.color_pair(7))
 
             except Exception as e:
-                error_line = f"Session {i+1}"
+                error_line = f"Session {session_idx+1}"
                 if len(error_line) > width:
                     error_line = error_line[:width]
                 self.safe_addstr(line_y, x, error_line)
@@ -931,13 +1067,127 @@ class TUI:
             if self.current_tab == "settings":
                 self.stdscr.attroff(curses.color_pair(7))
 
+    def draw_packet_detail(self, y, x, width, height):
+        """Нарисовать детали пакета"""
+        if not self.selected_packet_detail:
+            return
+
+        packet = self.selected_packet_detail
+
+        lines = []
+        lines.append("Packet Details")
+        lines.append("=" * min(width, 60))
+        lines.append("")
+
+        # Основная информация
+        lines.append(f"Time: {datetime.fromtimestamp(packet.timestamp).strftime('%H:%M:%S.%f')[:-3]}")
+        lines.append(f"Source: {packet.src_ip}:{packet.src_port}")
+        lines.append(f"Destination: {packet.dst_ip}:{packet.dst_port}")
+        lines.append(f"Protocol: {packet.protocol}")
+        lines.append(f"Type: {packet.packet_type.value}")
+        lines.append(f"Size: {format_bytes(packet.size)}")
+        lines.append(f"Session ID: {packet.session_id or 'N/A'}")
+        lines.append("")
+
+        # Данные пакета
+        lines.append("Packet Data:")
+        lines.append("-" * min(width, 40))
+
+        # Отображаем данные в зависимости от типа пакета
+        if packet.data:
+            try:
+                # Для HTTP запросов
+                if packet.packet_type == PacketType.HTTP_REQUEST:
+                    lines.append(f"Method: {packet.data.get('method', 'N/A')}")
+                    lines.append(f"URL: {packet.data.get('url', 'N/A')}")
+                    lines.append(f"Host: {packet.data.get('host', 'N/A')}")
+                    lines.append(f"Path: {packet.data.get('path', 'N/A')}")
+
+                    if 'headers' in packet.data and packet.data['headers']:
+                        lines.append("Headers:")
+                        for key, value in packet.data['headers'].items():
+                            if key and value:
+                                lines.append(f"  {key}: {value}")
+
+                    if 'post_data' in packet.data and packet.data['post_data']:
+                        lines.append(f"POST Data: {packet.data['post_data'][:100]}...")
+
+                # Для HTTP ответов
+                elif packet.packet_type == PacketType.HTTP_RESPONSE:
+                    lines.append(f"Status: {packet.data.get('status_code', 'N/A')}")
+                    lines.append(f"Reason: {packet.data.get('reason_phrase', 'N/A')}")
+
+                    if 'headers' in packet.data and packet.data['headers']:
+                        lines.append("Headers:")
+                        for key, value in packet.data['headers'].items():
+                            if key and value:
+                                lines.append(f"  {key}: {value}")
+
+                    if 'body_preview' in packet.data and packet.data['body_preview']:
+                        lines.append(f"Body Preview: {packet.data['body_preview'][:200]}...")
+
+                # Для HTTPS
+                elif packet.packet_type == PacketType.HTTPS_SESSION:
+                    lines.append(f"Direction: {packet.data.get('direction', 'N/A')}")
+                    lines.append(f"Client: {packet.data.get('client_ip', 'N/A')}")
+                    lines.append(f"Server: {packet.data.get('server_ip', 'N/A')}")
+                    lines.append(f"TLS Type: {packet.data.get('tls_type', 'N/A')}")
+
+                    if 'sni' in packet.data and packet.data['sni']:
+                        lines.append(f"SNI: {packet.data['sni']}")
+
+                    if 'vulnerabilities' in packet.data and packet.data['vulnerabilities']:
+                        lines.append("Vulnerabilities:")
+                        for vuln in packet.data['vulnerabilities']:
+                            lines.append(f"  • {vuln}")
+
+                # Для DNS
+                elif packet.packet_type in [PacketType.DNS_QUERY, PacketType.DNS_RESPONSE]:
+                    if 'queries' in packet.data and packet.data['queries']:
+                        lines.append("Queries:")
+                        for query in packet.data['queries']:
+                            lines.append(f"  • {query.get('qname', 'N/A')} ({query.get('qtype', 'N/A')})")
+
+                    if 'answers' in packet.data and packet.data['answers']:
+                        lines.append("Answers:")
+                        for answer in packet.data['answers']:
+                            lines.append(f"  • {answer.get('rrname', 'N/A')} -> {answer.get('rdata', 'N/A')}")
+
+                # Для других типов
+                else:
+                    # Показываем все данные пакета
+                    for key, value in packet.data.items():
+                        if value:
+                            lines.append(f"{key}: {value}")
+            except Exception as e:
+                lines.append(f"Error displaying data: {str(e)}")
+
+        lines.append("")
+        lines.append("[Enter/ESC] Back to packets list")
+
+        # Отображаем строки
+        for i, line in enumerate(lines):
+            line_y = y + i
+            if line_y >= height - 1:
+                break
+
+            # Центрируем заголовок
+            if i == 0:
+                self.stdscr.attron(curses.color_pair(5) | curses.A_BOLD)
+                centered_x = max(0, (width - len(line)) // 2)
+                self.safe_addstr(line_y, centered_x, line)
+                self.stdscr.attroff(curses.color_pair(5) | curses.A_BOLD)
+            else:
+                self.safe_addstr(line_y, x, line)
+
     def draw_status_bar(self, y, width):
         """Нарисовать статусную строку"""
         # Статус выбранного интерфейса
-        interface_status = f"Interface: {self.selected_interface}" if self.selected_interface else "No interface selected"
+        interface_display = self.selected_interface or "None"
 
         # Статус сниффинга
-        sniff_status = "SNIFFING" if self.packet_analyzer.sniffing else "IDLE"
+        analyzer_stats = self.packet_analyzer.get_statistics()
+        sniff_status = "SNIFFING" if analyzer_stats['sniffing'] else "IDLE"
 
         # Текущая позиция
         position_info = ""
@@ -953,6 +1203,13 @@ class TUI:
             if self.interfaces:
                 position_info = f"Interface {self.selected_row + 1}/{len(self.interfaces)}"
 
+        # Статус экспорта
+        export_info = ""
+        if self.exporting:
+            export_info = f" | Export: {self.export_status}"
+        elif self.export_status:
+            export_info = f" | {self.export_status}"
+
         # Собираем статусную строку
         status_parts = []
         status_parts.append(f"Tab: {self.current_tab}")
@@ -961,10 +1218,13 @@ class TUI:
         if position_info:
             status_parts.append(position_info)
 
-        status = " | ".join(status_parts)
+        status = " | ".join(status_parts) + export_info
 
         # Добавляем клавиши управления
-        controls = "[Q]uit [1-6]Tabs [S]niff [R]efresh [↑↓]Nav [Enter]Select"
+        if self.show_packet_detail:
+            controls = "[Enter/ESC] Back"
+        else:
+            controls = "[Q]uit [1-6]Tabs [S]niff [R]efresh [↑↓]Nav [Enter]Select"
 
         # Формируем полную строку
         full_status = f" {status} | {controls} "
@@ -980,7 +1240,17 @@ class TUI:
                 # Если совсем мало места, показываем только статус
                 full_status = status[:width - 3] + "..."
 
+        # Выбираем цвет для статусной строки
+        if self.exporting:
+            color_pair = 10  # Красный для экспорта
+        elif self.export_status and "failed" in self.export_status.lower():
+            color_pair = 10  # Красный для ошибки
+        elif self.export_status and "exported" in self.export_status.lower():
+            color_pair = 9   # Зеленый для успеха
+        else:
+            color_pair = 8   # Стандартный цвет
+
         # Рисуем статусную строку
-        self.stdscr.attron(curses.color_pair(8) | curses.A_BOLD)
+        self.stdscr.attron(curses.color_pair(color_pair) | curses.A_BOLD)
         self.stdscr.addstr(y, 0, full_status.ljust(width))
-        self.stdscr.attroff(curses.color_pair(8) | curses.A_BOLD)
+        self.stdscr.attroff(curses.color_pair(color_pair) | curses.A_BOLD)
