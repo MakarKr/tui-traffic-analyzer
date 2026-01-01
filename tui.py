@@ -36,6 +36,14 @@ class TUI:
         self.selected_interface = None
         self.scan_results = []
 
+        # MITM атака - цели
+        self.mitm_target_ip = ""
+        self.mitm_gateway_ip = ""
+        self.mitm_status_message = ""
+        self.mitm_status_time = 0
+        self.mitm_input_mode = None  # 'target' или 'gateway'
+        self.mitm_input_buffer = ""
+
         # Флаги состояния
         self.exporting = False
         self.export_status = ""
@@ -60,6 +68,9 @@ class TUI:
             self.selected_interface = self.interfaces[0]
             # Обновляем текущий интерфейс в анализаторе
             self.packet_analyzer.current_interface = self.selected_interface
+            # Получаем шлюз по умолчанию для интерфейса
+            info = get_interface_info(self.selected_interface)
+            self.mitm_gateway_ip = info.get("gateway", "192.168.1.1")
         else:
             # Если интерфейсы не найдены, показываем сообщение
             self.interfaces = ["No interfaces found - check permissions"]
@@ -86,6 +97,7 @@ class TUI:
         curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)  # Статус бар
         curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_GREEN)  # Экспорт успех
         curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_RED)  # Экспорт ошибка
+        curses.init_pair(11, curses.COLOR_GREEN, curses.COLOR_BLACK)  # Ввод режим
 
     def sanitize_string(self, text):
         """Очистить строку от нулевых и непечатаемых символов"""
@@ -221,6 +233,12 @@ class TUI:
         try:
             key = self.stdscr.getch()
 
+            # Если в режиме ввода MITM, обрабатываем специально
+            if self.mitm_input_mode:
+                self.handle_mitm_input(key)
+                return
+
+            # Общие клавиши выхода
             if key == ord('q') or key == 27:  # 'q' или ESC
                 self.running = False
                 return
@@ -239,36 +257,42 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
             elif key == ord('2'):
                 self.current_tab = "packets"
                 self.selected_row = 0
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
             elif key == ord('3'):
                 self.current_tab = "sessions"
                 self.selected_row = 0
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
             elif key == ord('4'):
                 self.current_tab = "mitm"
                 self.selected_row = 0
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
             elif key == ord('5'):
                 self.current_tab = "scanner"
                 self.selected_row = 0
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
             elif key == ord('6'):
                 self.current_tab = "settings"
                 self.selected_row = 0
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.mitm_input_mode = None
 
             # Навигация в текущем табе (работает везде, кроме экспорта)
             elif key == curses.KEY_UP:
@@ -308,8 +332,51 @@ class TUI:
             elif key == ord('d'):
                 self.show_packet_details()
 
+            # MITM: Установить цель
+            elif key == ord('t'):
+                if self.current_tab == "mitm":
+                    self.mitm_input_mode = 'target'
+                    self.mitm_input_buffer = self.mitm_target_ip
+
+            # MITM: Установить шлюз
+            elif key == ord('g'):
+                if self.current_tab == "mitm":
+                    self.mitm_input_mode = 'gateway'
+                    self.mitm_input_buffer = self.mitm_gateway_ip
+
+            # Scanner: Установить выбранный хост как цель MITM
+            elif key == ord('m') or key == ord('M'):
+                if self.current_tab == "scanner" and self.selected_row >= 2:
+                    host_index = self.selected_row - 2
+                    if 0 <= host_index < len(self.scan_results):
+                        self.mitm_target_ip = self.scan_results[host_index]['ip']
+                        self.mitm_status_message = f"Target set to: {self.mitm_target_ip}"
+                        self.mitm_status_time = time.time()
+
         except Exception as e:
             pass
+
+    def handle_mitm_input(self, key):
+        """Обработать ввод для MITM"""
+        if key == 27:  # ESC - отмена
+            self.mitm_input_mode = None
+            self.mitm_input_buffer = ""
+        elif key == ord('\n') or key == ord('\r'):  # Enter - подтверждение
+            if self.mitm_input_mode == 'target':
+                self.mitm_target_ip = self.mitm_input_buffer
+                self.mitm_status_message = f"Target set to: {self.mitm_target_ip}"
+            elif self.mitm_input_mode == 'gateway':
+                self.mitm_gateway_ip = self.mitm_input_buffer
+                self.mitm_status_message = f"Gateway set to: {self.mitm_gateway_ip}"
+
+            self.mitm_status_time = time.time()
+            self.mitm_input_mode = None
+            self.mitm_input_buffer = ""
+        elif key == curses.KEY_BACKSPACE or key == 127:  # Backspace
+            if self.mitm_input_buffer:
+                self.mitm_input_buffer = self.mitm_input_buffer[:-1]
+        elif 32 <= key <= 126:  # Печатаемые символы
+            self.mitm_input_buffer += chr(key)
 
     def handle_up(self):
         """Обработка клавиши Вверх"""
@@ -417,8 +484,10 @@ class TUI:
                 host_index = self.selected_row - 2
                 if 0 <= host_index < len(self.scan_results):
                     selected_host = self.scan_results[host_index]
-                    # Здесь можно добавить логику для использования выбранного хоста
-                    pass
+                    # Автоматически устанавливаем как цель MITM
+                    self.mitm_target_ip = selected_host['ip']
+                    self.mitm_status_message = f"Target set to: {self.mitm_target_ip}"
+                    self.mitm_status_time = time.time()
 
         elif self.current_tab == "settings":
             # Выбор интерфейса
@@ -426,6 +495,9 @@ class TUI:
                 self.selected_interface = self.interfaces[self.selected_row]
                 # Обновляем текущий интерфейс в анализаторе
                 self.packet_analyzer.current_interface = self.selected_interface
+                # Получаем шлюз по умолчанию
+                info = get_interface_info(self.selected_interface)
+                self.mitm_gateway_ip = info.get("gateway", "192.168.1.1")
                 # Перезапускаем сниффинг если он активен
                 if self.packet_analyzer.sniffing:
                     self.packet_analyzer.stop_sniffing()
@@ -449,16 +521,36 @@ class TUI:
         if self.mitm_attacker and self.mitm_attacker.running:
             self.mitm_attacker.stop_attack()
             self.mitm_attacker = None
+            self.mitm_status_message = "MITM attack stopped"
+            self.mitm_status_time = time.time()
         else:
-            # TODO: Запросить target_ip и gateway_ip у пользователя
-            # Временные значения для демонстрации
-            if self.selected_interface:
-                info = get_interface_info(self.selected_interface)
-                target_ip = info.get("gateway", "192.168.1.1")
-                gateway_ip = info.get("gateway", "192.168.1.254")
-                self.mitm_attacker = MITMAttacker(target_ip, gateway_ip, self.selected_interface)
-                attack_thread = threading.Thread(target=self.mitm_attacker.start_attack, daemon=True)
-                attack_thread.start()
+            if not self.selected_interface:
+                self.mitm_status_message = "Error: No interface selected"
+                self.mitm_status_time = time.time()
+                return
+
+            if not self.mitm_target_ip:
+                self.mitm_status_message = "Error: Target IP not set"
+                self.mitm_status_time = time.time()
+                return
+
+            if not self.mitm_gateway_ip:
+                self.mitm_status_message = "Error: Gateway IP not set"
+                self.mitm_status_time = time.time()
+                return
+
+            # Запускаем MITM атаку
+            self.mitm_attacker = MITMAttacker(
+                target_ip=self.mitm_target_ip,
+                gateway_ip=self.mitm_gateway_ip,
+                interface=self.selected_interface
+            )
+
+            attack_thread = threading.Thread(target=self.mitm_attacker.start_attack, daemon=True)
+            attack_thread.start()
+
+            self.mitm_status_message = f"MITM attack started: {self.mitm_target_ip} -> {self.mitm_gateway_ip}"
+            self.mitm_status_time = time.time()
 
     def start_scan(self):
         """Начать сканирование сети"""
@@ -474,6 +566,9 @@ class TUI:
     def on_scan_complete(self, results):
         """Обработчик завершения сканирования"""
         self.scan_results = results
+        if results:
+            self.mitm_status_message = f"Scan complete: found {len(results)} hosts"
+            self.mitm_status_time = time.time()
 
     def start_export(self):
         """Начать экспорт данных в отдельном потоке"""
@@ -628,7 +723,6 @@ class TUI:
             f"HTTP Requests: {stats['http_requests']}",
             f"HTTP Responses: {stats['http_responses']}",
             f"HTTPS Sessions: {stats['https_sessions']}",
-            f"DNS Queries: {stats.get('dns_queries', 0)}",
             "",
             "Protocol Distribution:"
         ]
@@ -860,7 +954,7 @@ class TUI:
             f"{{:>{col_widths['bytes']}}}"
         )
 
-        # Заголовок таблицы
+        # Заголовок таблица
         header = fmt.format(
             self.format_column_text("ID", col_widths['id']),
             self.format_column_text("Client", col_widths['client']),
@@ -935,31 +1029,98 @@ class TUI:
         lines.append("=" * 40)
         lines.append("")
 
+        # Если в режиме ввода
+        if self.mitm_input_mode:
+            prompt = ""
+            if self.mitm_input_mode == 'target':
+                prompt = f"Enter Target IP [{self.mitm_target_ip}]: "
+            elif self.mitm_input_mode == 'gateway':
+                prompt = f"Enter Gateway IP [{self.mitm_gateway_ip}]: "
+
+            lines.append(prompt + self.mitm_input_buffer + "_")
+            lines.append("")
+            lines.append("[Enter] Confirm  [ESC] Cancel  [Backspace] Delete")
+            lines.append("")
+
+            # Отображаем строки
+            for i, line in enumerate(lines):
+                if y + i < height + 3:
+                    if i == 0:  # Первая строка - промпт
+                        self.stdscr.attron(curses.color_pair(11))
+                        self.safe_addstr(y + i, x, line)
+                        self.stdscr.attroff(curses.color_pair(11))
+                    else:
+                        self.safe_addstr(y + i, x, line)
+            return
+
+        # Статус атаки
         if self.mitm_attacker and self.mitm_attacker.running:
             lines.append("Status: RUNNING")
-            lines.append(f"Target: {self.mitm_attacker.target_ip}")
-            lines.append(f"Gateway: {self.mitm_attacker.gateway_ip}")
-            lines.append(f"Interface: {self.mitm_attacker.interface}")
+            attacker_status = self.mitm_attacker.get_status()
+            lines.append(f"Target: {attacker_status['target_ip']}")
+            lines.append(f"Gateway: {attacker_status['gateway_ip']}")
+            lines.append(f"Interface: {attacker_status['interface']}")
+            lines.append(f"Packets sent: {attacker_status['spoof_packets_sent']}")
+            lines.append(f"Duration: {attacker_status['duration']:.1f}s")
             lines.append("")
             lines.append("[Enter] Stop MITM attack")
         else:
             lines.append("Status: STOPPED")
-            lines.append("")
-            lines.append("To start MITM attack:")
-            lines.append("1. Select target IP address")
-            lines.append("2. Select gateway IP address")
-            lines.append("3. Press Enter to start")
-            lines.append("")
-            lines.append("[Enter] Start MITM attack")
 
         lines.append("")
-        lines.append("Note: Requires root privileges")
-        lines.append("      Enable IP forwarding first")
+
+        # Текущие настройки
+        lines.append("Current Settings:")
+        lines.append(f"  Interface: {self.selected_interface or 'Not selected'}")
+        lines.append(f"  Target IP: {self.mitm_target_ip or 'Not set'}")
+        lines.append(f"  Gateway IP: {self.mitm_gateway_ip or 'Not set'}")
+        lines.append("")
+
+        # Инструкция по настройке
+        lines.append("How to configure:")
+        lines.append("  1. Select interface in Settings tab")
+        lines.append("  2. Set target IP (T) or use Scanner (M)")
+        lines.append("  3. Set gateway IP (G) or use default")
+        lines.append("  4. Press Enter to start/stop attack")
+        lines.append("")
+
+        # Управление
+        lines.append("Controls:")
+        lines.append("  [T] - Set target IP")
+        lines.append("  [G] - Set gateway IP")
+        lines.append("  [Enter] - Start/Stop attack")
+        lines.append("  [M] in Scanner - Set target from scan")
+        lines.append("")
+
+        # Статусное сообщение (если есть)
+        if self.mitm_status_message and time.time() - self.mitm_status_time < 5:
+            lines.append(f"Status: {self.mitm_status_message}")
+            lines.append("")
+
+        # Требования
+        lines.append("Requirements:")
+        lines.append("  - Root/Administrator privileges")
+        lines.append("  - IP forwarding enabled automatically")
+        lines.append("  - Npcap/WinPcap for Windows (for full functionality)")
 
         # Отображаем строки
         for i, line in enumerate(lines):
             if y + i < height + 3:
-                self.safe_addstr(y + i, x, line)
+                # Выделяем важные строки
+                if "Status: RUNNING" in line:
+                    self.stdscr.attron(curses.color_pair(1) | curses.A_BOLD)
+                    self.safe_addstr(y + i, x, line)
+                    self.stdscr.attroff(curses.color_pair(1) | curses.A_BOLD)
+                elif "Status: STOPPED" in line:
+                    self.stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
+                    self.safe_addstr(y + i, x, line)
+                    self.stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+                elif line.startswith("  [T]") or line.startswith("  [G]"):
+                    self.stdscr.attron(curses.color_pair(4))
+                    self.safe_addstr(y + i, x, line)
+                    self.stdscr.attroff(curses.color_pair(4))
+                else:
+                    self.safe_addstr(y + i, x, line)
 
     def draw_scanner(self, y, x, width, height):
         """Нарисовать сканер сети"""
@@ -978,7 +1139,7 @@ class TUI:
             lines.append(f"Interface: {self.selected_interface}")
             lines.append("")
             lines.append("[Enter] Start scanning")
-            lines.append("[↓] Select host for MITM")
+            lines.append("[M] Set selected host as MITM target")
 
         lines.append("")
         lines.append("Scan Results:")
@@ -989,9 +1150,18 @@ class TUI:
                 ip = self.sanitize_string(host['ip'])
                 mac = self.sanitize_string(host['mac'])
                 vendor = self.sanitize_string(host['vendor'])
-                lines.append(f"{ip:15} {mac:17} {vendor}")
+
+                # Показываем, если этот хост выбран как цель MITM
+                mitm_marker = " ← MITM Target" if ip == self.mitm_target_ip else ""
+                lines.append(f"{ip:15} {mac:17} {vendor}{mitm_marker}")
         else:
             lines.append("No scan results yet")
+
+        lines.append("")
+        lines.append("Controls:")
+        lines.append("  [Enter] on host - Set as MITM target")
+        lines.append("  [M] - Set selected host as MITM target")
+        lines.append("  [↑↓] - Navigate hosts")
 
         # Отображаем строки
         for i, line in enumerate(lines):
@@ -999,26 +1169,29 @@ class TUI:
             if line_y >= height + 3:
                 break
 
-            # Выделяем выбранную строку (учитываем смещение для заголовков)
+            # Выделяем выбранную строку
             if self.current_tab == "scanner":
                 # Заголовок и строка состояния - 0 и 1
-                # Кнопки Start/Stop - 4 и 5 (после пустой строки)
-                # Результаты сканирования начинаются с 8 строки
+                # Кнопки Start/Stop - 5 и 6 (после пустой строки)
+                # Результаты сканирования начинаются с 9 строки
 
-                if i == 4 and self.selected_row == 0:  # Start scanning
+                if i == 5 and self.selected_row == 0:  # Start scanning
                     self.stdscr.attron(curses.color_pair(7))
-                elif i == 5 and self.selected_row == 1:  # Stop scanning
+                elif i == 6 and self.selected_row == 1:  # Stop scanning
                     self.stdscr.attron(curses.color_pair(7))
-                elif i >= 8:  # Результаты сканирования
-                    result_index = i - 8
+                elif i >= 9 and i < 9 + len(self.scan_results):  # Результаты сканирования
+                    result_index = i - 9
                     if result_index >= 0 and result_index < len(self.scan_results):
                         if self.selected_row == result_index + 2:  # +2 потому что первые 2 - кнопки
                             self.stdscr.attron(curses.color_pair(7))
+                        # Если это цель MITM, выделяем цветом
+                        elif self.scan_results[result_index]['ip'] == self.mitm_target_ip:
+                            self.stdscr.attron(curses.color_pair(1))
 
             self.safe_addstr(line_y, x, line)
 
             if self.current_tab == "scanner":
-                self.stdscr.attroff(curses.color_pair(7))
+                self.stdscr.attroff(curses.color_pair(7) | curses.color_pair(1))
 
     def draw_settings(self, y, x, width, height):
         """Нарисовать настройки"""
@@ -1041,6 +1214,11 @@ class TUI:
         lines.append(f"  Sniff Filter: {config.SNIFF_FILTER}")
         lines.append(f"  Max Packets: {config.MAX_PACKETS_DISPLAY}")
         lines.append(f"  Refresh Rate: {config.REFRESH_RATE}s")
+
+        lines.append("")
+        lines.append("MITM Settings:")
+        lines.append(f"  Target IP: {self.mitm_target_ip or 'Not set'}")
+        lines.append(f"  Gateway IP: {self.mitm_gateway_ip or 'Not set'}")
 
         lines.append("")
         lines.append("[R] Refresh interfaces list")
@@ -1203,6 +1381,13 @@ class TUI:
             if self.interfaces:
                 position_info = f"Interface {self.selected_row + 1}/{len(self.interfaces)}"
 
+        # Статус MITM
+        mitm_info = ""
+        if self.mitm_attacker and self.mitm_attacker.running:
+            mitm_info = " | MITM: RUNNING"
+        elif self.mitm_target_ip:
+            mitm_info = f" | Target: {self.mitm_target_ip}"
+
         # Статус экспорта
         export_info = ""
         if self.exporting:
@@ -1218,11 +1403,13 @@ class TUI:
         if position_info:
             status_parts.append(position_info)
 
-        status = " | ".join(status_parts) + export_info
+        status = " | ".join(status_parts) + mitm_info + export_info
 
         # Добавляем клавиши управления
         if self.show_packet_detail:
             controls = "[Enter/ESC] Back"
+        elif self.mitm_input_mode:
+            controls = "[Enter] Confirm  [ESC] Cancel"
         else:
             controls = "[Q]uit [1-6]Tabs [S]niff [R]efresh [↑↓]Nav [Enter]Select"
 
@@ -1247,6 +1434,8 @@ class TUI:
             color_pair = 10  # Красный для ошибки
         elif self.export_status and "exported" in self.export_status.lower():
             color_pair = 9   # Зеленый для успеха
+        elif self.mitm_attacker and self.mitm_attacker.running:
+            color_pair = 2   # Красный для активной MITM атаки
         else:
             color_pair = 8   # Стандартный цвет
 
