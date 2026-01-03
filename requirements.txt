@@ -5,4 +5,3 @@ textual==0.54.0
 prompt-toolkit==3.0.43
 psutil==5.9.8
 netifaces==0.11.0
-windows-curses==2.3.1  # Только для Windows, но можно оставить для всех платформ
