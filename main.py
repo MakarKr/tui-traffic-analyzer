@@ -9,8 +9,12 @@ from utils import clear_screen, check_root, wait_for_key
 from colorama import init, Fore
 from prompt_toolkit import prompt
 from prompt_toolkit.key_binding import KeyBindings
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
 
 init()
+console = Console()
 
 
 def get_user_input():
@@ -55,16 +59,9 @@ def show_welcome_message():
 
     clear_screen()
 
-    # Использовать rich для красивого вывода
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.text import Text
-
-    console = Console()
-
-    # Заголовок программы
+    # Использовать уже созданный объект console
     console.print(Panel.fit(
-        Text("TUI Traffic Analyzer v1.0", style="bold cyan"),
+        Text("TUI Traffic Analyzer", style="bold cyan"),
         border_style="cyan"
     ))
 
@@ -105,7 +102,6 @@ def main():
     show_welcome_message()
 
     # Ожидание подтверждения пользователя
-    console = Console()
     console.print("\n[yellow]Press any key to continue (Q to quit)...[/yellow]")
 
     key = get_user_input()
