@@ -5,10 +5,10 @@ import curses
 import time
 import threading
 import json
-from typing import Dict, List, Any, Optional
 from datetime import datetime
+from typing import Dict, List, Any, Optional
 from utils import get_network_interfaces, get_interface_info, clear_screen, format_bytes, format_time_delta
-from session_manager import SessionManager, PacketType
+from session_manager import SessionManager, PacketType, Session
 from packet_analyzer import PacketAnalyzer
 from mitm_attacker import MITMAttacker
 from network_scanner import NetworkScanner
@@ -51,9 +51,11 @@ class TUI:
         self.export_progress = 0
         self.export_total = 0
 
-        # Детальная информация о пакете
+        # Детальная информация о пакете/сессии
         self.selected_packet_detail = None
         self.show_packet_detail = False
+        self.selected_session_detail = None
+        self.show_session_detail = False
 
         # Инициализация curses
         self.init_curses()
@@ -243,11 +245,14 @@ class TUI:
                 self.running = False
                 return
 
-            # Если показываем детали пакета, обрабатываем только ESC и Enter
-            if self.show_packet_detail and self.selected_packet_detail:
+            # Если показываем детали пакета или сессии, обрабатываем только ESC и Enter
+            if (self.show_packet_detail and self.selected_packet_detail) or \
+               (self.show_session_detail and self.selected_session_detail):
                 if key == ord('\n') or key == ord('\r') or key == ord(' ') or key == 27:
                     self.show_packet_detail = False
                     self.selected_packet_detail = None
+                    self.show_session_detail = False
+                    self.selected_session_detail = None
                 return
 
             # Навигация по табам (всегда доступна, даже во время экспорта)
@@ -257,6 +262,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
             elif key == ord('2'):
                 self.current_tab = "packets"
@@ -264,6 +271,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
             elif key == ord('3'):
                 self.current_tab = "sessions"
@@ -271,6 +280,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
             elif key == ord('4'):
                 self.current_tab = "mitm"
@@ -278,6 +289,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
             elif key == ord('5'):
                 self.current_tab = "scanner"
@@ -285,6 +298,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
             elif key == ord('6'):
                 self.current_tab = "settings"
@@ -292,6 +307,8 @@ class TUI:
                 self.scroll_offset = 0
                 self.show_packet_detail = False
                 self.selected_packet_detail = None
+                self.show_session_detail = False
+                self.selected_session_detail = None
                 self.mitm_input_mode = None
 
             # Навигация в текущем табе (работает везде, кроме экспорта)
@@ -328,9 +345,12 @@ class TUI:
                 else:
                     self.start_export()
 
-            # Показать детали выбранного пакета
+            # Показать детали выбранного пакета/сессии
             elif key == ord('d'):
-                self.show_packet_details()
+                if self.current_tab == "packets":
+                    self.show_packet_details()
+                elif self.current_tab == "sessions":
+                    self.show_session_details()
 
             # MITM: Установить цель
             elif key == ord('t'):
@@ -397,7 +417,7 @@ class TUI:
 
         elif self.current_tab == "scanner":
             # В сканере есть выбор хоста
-            max_rows = len(self.scan_results) + 2  # Результаты + 2 строки управления
+            max_rows = len(self.scan_results) + 1  # Результаты + 1 строка управления
             self.selected_row = max(0, self.selected_row - 1)
 
         elif self.current_tab == "settings":
@@ -435,8 +455,8 @@ class TUI:
                         self.scroll_offset = min(max_rows - 14, self.selected_row - 14)
 
         elif self.current_tab == "scanner":
-            # В сканере: 0=Start scan, 1=Stop scan, далее результаты
-            max_rows = len(self.scan_results) + 1  # Результаты + 1 строка управления
+            # В сканере: 0=Start scan, далее результаты
+            max_rows = len(self.scan_results)  # Только результаты
             if self.selected_row < max_rows:
                 self.selected_row += 1
 
@@ -477,11 +497,9 @@ class TUI:
         elif self.current_tab == "scanner":
             if self.selected_row == 0:
                 self.start_scan()
-            elif self.selected_row == 1:
-                self.stop_scan()
-            elif self.selected_row >= 2:
+            elif self.selected_row >= 1:
                 # Выбор хоста из результатов сканирования
-                host_index = self.selected_row - 2
+                host_index = self.selected_row - 1
                 if 0 <= host_index < len(self.scan_results):
                     selected_host = self.scan_results[host_index]
                     # Автоматически устанавливаем как цель MITM
@@ -507,6 +525,9 @@ class TUI:
         elif self.current_tab == "packets":
             # Показать детали выбранного пакета
             self.show_packet_details()
+        elif self.current_tab == "sessions":
+            # Показать детали выбранной сессии
+            self.show_session_details()
 
     def toggle_sniffing(self):
         """Включить/выключить сниффинг"""
@@ -623,6 +644,14 @@ class TUI:
                 self.selected_packet_detail = packets[self.selected_row]
                 self.show_packet_detail = True
 
+    def show_session_details(self):
+        """Показать детали выбранной сессии"""
+        if self.current_tab == "sessions":
+            sessions = self.session_manager.get_sessions(limit=1000)
+            if 0 <= self.selected_row < len(sessions):
+                self.selected_session_detail = sessions[self.selected_row]
+                self.show_session_detail = True
+
     def draw(self):
         """Нарисовать интерфейс"""
         self.stdscr.clear()
@@ -631,6 +660,11 @@ class TUI:
         # Если показываем детали пакета, рисуем их
         if self.show_packet_detail and self.selected_packet_detail:
             self.draw_packet_detail(0, 0, width, height)
+            return
+
+        # Если показываем детали сессии, рисуем их
+        if self.show_session_detail and self.selected_session_detail:
+            self.draw_session_detail(0, 0, width, height)
             return
 
         # Рисуем заголовок
@@ -743,7 +777,7 @@ class TUI:
             "[R] Refresh interfaces",
             "[C] Clear data",
             "[E] Export to JSON",
-            "[D] Show packet details",
+            "[D] Show packet/session details",
             "[Q] Quit"
         ]
 
@@ -885,27 +919,26 @@ class TUI:
                 if len(line) > width:
                     line = line[:width]
 
-                # Выбираем цвет в зависимости от типа пакета
-                color = curses.color_pair(0)
-                if packet.packet_type == PacketType.HTTP_REQUEST:
-                    color = curses.color_pair(1)  # Зеленый
-                elif packet.packet_type == PacketType.HTTP_RESPONSE:
-                    color = curses.color_pair(4)  # Голубой
-                elif packet.packet_type == PacketType.HTTPS_SESSION:
-                    color = curses.color_pair(5)  # Пурпурный
-                elif packet.packet_type in [PacketType.DNS_QUERY, PacketType.DNS_RESPONSE]:
-                    color = curses.color_pair(6)  # Синий
-
                 # Выделяем выбранную строку
                 if packet_idx == self.selected_row and self.current_tab == "packets":
-                    self.stdscr.attron(curses.color_pair(7) | curses.A_BOLD)
+                    self.stdscr.attron(curses.color_pair(7))
+                    self.safe_addstr(line_y, x, line)
+                    self.stdscr.attroff(curses.color_pair(7))
+                else:
+                    # Выбираем цвет в зависимости от типа пакета
+                    color = curses.color_pair(0)
+                    if packet.packet_type == PacketType.HTTP_REQUEST:
+                        color = curses.color_pair(1)  # Зеленый
+                    elif packet.packet_type == PacketType.HTTP_RESPONSE:
+                        color = curses.color_pair(4)  # Голубой
+                    elif packet.packet_type == PacketType.HTTPS_SESSION:
+                        color = curses.color_pair(5)  # Пурпурный
+                    elif packet.packet_type in [PacketType.DNS_QUERY, PacketType.DNS_RESPONSE]:
+                        color = curses.color_pair(6)  # Синий
 
-                self.stdscr.attron(color)
-                self.safe_addstr(line_y, x, line)
-                self.stdscr.attroff(color)
-
-                if packet_idx == self.selected_row and self.current_tab == "packets":
-                    self.stdscr.attroff(curses.color_pair(7) | curses.A_BOLD)
+                    self.stdscr.attron(color)
+                    self.safe_addstr(line_y, x, line)
+                    self.stdscr.attroff(color)
 
             except Exception as e:
                 # В случае ошибки показываем упрощённую строку
@@ -1009,11 +1042,10 @@ class TUI:
                 # Выделяем выбранную строку
                 if session_idx == self.selected_row and self.current_tab == "sessions":
                     self.stdscr.attron(curses.color_pair(7))
-
-                self.safe_addstr(line_y, x, line)
-
-                if session_idx == self.selected_row and self.current_tab == "sessions":
+                    self.safe_addstr(line_y, x, line)
                     self.stdscr.attroff(curses.color_pair(7))
+                else:
+                    self.safe_addstr(line_y, x, line)
 
             except Exception as e:
                 error_line = f"Session {session_idx+1}"
@@ -1133,27 +1165,33 @@ class TUI:
         if self.network_scanner.scanning:
             lines.append("Status: SCANNING...")
             lines.append("")
-            lines.append("[Enter] Stop scanning")
+            lines.append("[Enter] on host - Set as MITM target")
         else:
             lines.append("Status: IDLE")
             lines.append(f"Interface: {self.selected_interface}")
             lines.append("")
             lines.append("[Enter] Start scanning")
-            lines.append("[M] Set selected host as MITM target")
 
+        lines.append("[M] Set selected host as MITM target")
         lines.append("")
         lines.append("Scan Results:")
         lines.append("-" * 40)
 
         if self.scan_results:
-            for i, host in enumerate(self.scan_results[:height - 10]):
+            # Ограничиваем количество отображаемых хостов чтобы не выйти за экран
+            max_hosts = min(len(self.scan_results), height - 10)
+            for i, host in enumerate(self.scan_results[:max_hosts]):
                 ip = self.sanitize_string(host['ip'])
                 mac = self.sanitize_string(host['mac'])
                 vendor = self.sanitize_string(host['vendor'])
 
                 # Показываем, если этот хост выбран как цель MITM
                 mitm_marker = " ← MITM Target" if ip == self.mitm_target_ip else ""
-                lines.append(f"{ip:15} {mac:17} {vendor}{mitm_marker}")
+                line = f"{ip:15} {mac:17} {vendor[:20]}{mitm_marker}"
+                lines.append(line)
+
+            if len(self.scan_results) > max_hosts:
+                lines.append(f"... and {len(self.scan_results) - max_hosts} more")
         else:
             lines.append("No scan results yet")
 
@@ -1177,12 +1215,10 @@ class TUI:
 
                 if i == 5 and self.selected_row == 0:  # Start scanning
                     self.stdscr.attron(curses.color_pair(7))
-                elif i == 6 and self.selected_row == 1:  # Stop scanning
-                    self.stdscr.attron(curses.color_pair(7))
                 elif i >= 9 and i < 9 + len(self.scan_results):  # Результаты сканирования
                     result_index = i - 9
-                    if result_index >= 0 and result_index < len(self.scan_results):
-                        if self.selected_row == result_index + 2:  # +2 потому что первые 2 - кнопки
+                    if 0 <= result_index < len(self.scan_results):
+                        if self.selected_row == result_index + 1:  # +1 потому что первая строка - Start scanning
                             self.stdscr.attron(curses.color_pair(7))
                         # Если это цель MITM, выделяем цветом
                         elif self.scan_results[result_index]['ip'] == self.mitm_target_ip:
@@ -1341,7 +1377,65 @@ class TUI:
                 lines.append(f"Error displaying data: {str(e)}")
 
         lines.append("")
-        lines.append("[Enter/ESC] Back to packets list")
+        lines.append("[Enter/ESC] Back to list")
+
+        # Отображаем строки
+        for i, line in enumerate(lines):
+            line_y = y + i
+            if line_y >= height - 1:
+                break
+
+            # Центрируем заголовок
+            if i == 0:
+                self.stdscr.attron(curses.color_pair(5) | curses.A_BOLD)
+                centered_x = max(0, (width - len(line)) // 2)
+                self.safe_addstr(line_y, centered_x, line)
+                self.stdscr.attroff(curses.color_pair(5) | curses.A_BOLD)
+            else:
+                self.safe_addstr(line_y, x, line)
+
+    def draw_session_detail(self, y, x, width, height):
+        """Нарисовать детали сессии"""
+        if not self.selected_session_detail:
+            return
+
+        session = self.selected_session_detail
+
+        lines = []
+        lines.append("Session Details")
+        lines.append("=" * min(width, 60))
+        lines.append("")
+
+        # Основная информация
+        lines.append(f"Session ID: {session.session_id}")
+        lines.append(f"Protocol: {session.protocol}")
+        lines.append(f"Start Time: {datetime.fromtimestamp(session.start_time).strftime('%H:%M:%S')}")
+        if session.end_time:
+            lines.append(f"End Time: {datetime.fromtimestamp(session.end_time).strftime('%H:%M:%S')}")
+        lines.append(f"Duration: {format_time_delta(session.get_duration())}")
+        lines.append(f"Client: {session.client_ip}:{session.client_port}")
+        lines.append(f"Server: {session.server_ip}:{session.server_port}")
+        lines.append(f"Total Packets: {len(session.packets)}")
+        lines.append(f"Total Bytes: {format_bytes(session.total_bytes)}")
+        lines.append("")
+
+        # Список пакетов в сессии
+        lines.append("Packets in this session:")
+        lines.append("-" * min(width, 40))
+
+        if session.packets:
+            for i, packet in enumerate(session.packets[:10]):  # Показываем первые 10 пакетов
+                timestamp = datetime.fromtimestamp(packet.timestamp).strftime('%H:%M:%S')
+                lines.append(f"{i+1}. {timestamp} {packet.src_ip}:{packet.src_port} -> "
+                           f"{packet.dst_ip}:{packet.dst_port} {packet.protocol} ({format_bytes(packet.size)})")
+
+            if len(session.packets) > 10:
+                lines.append(f"... and {len(session.packets) - 10} more packets")
+        else:
+            lines.append("No packets in this session")
+
+        lines.append("")
+        lines.append("[Enter/ESC] Back to sessions list")
 
         # Отображаем строки
         for i, line in enumerate(lines):
@@ -1377,6 +1471,9 @@ class TUI:
             sessions = self.session_manager.get_sessions(limit=1000)
             if sessions:
                 position_info = f"Session {self.selected_row + 1}/{len(sessions)}"
+        elif self.current_tab == "scanner":
+            if self.scan_results:
+                position_info = f"Host {self.selected_row}/{len(self.scan_results)}"
         elif self.current_tab == "settings":
             if self.interfaces:
                 position_info = f"Interface {self.selected_row + 1}/{len(self.interfaces)}"
@@ -1406,7 +1503,7 @@ class TUI:
         status = " | ".join(status_parts) + mitm_info + export_info
 
         # Добавляем клавиши управления
-        if self.show_packet_detail:
+        if self.show_packet_detail or self.show_session_detail:
             controls = "[Enter/ESC] Back"
         elif self.mitm_input_mode:
             controls = "[Enter] Confirm  [ESC] Cancel"
