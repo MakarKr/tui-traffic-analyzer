@@ -1,81 +1,120 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
-import os
-from dataclasses import dataclass, field
-from typing import Dict, List, Any
 import json
+import os
+from rich.console import Console
+from rich.panel import Panel
+from rich.text import Text
+
+console = Console()
 
 
-@dataclass
 class Colors:
-    """Цветовые схемы для TUI"""
-    HTTP_REQUEST: str = "#00ff00"
-    HTTP_RESPONSE: str = "#0088ff"
-    HTTPS_SESSION: str = "#ff00ff"
-    ERROR: str = "#ff0000"
-    WARNING: str = "#ffff00"
-    INFO: str = "#00ffff"
-    SUCCESS: str = "#00ff00"
-    DEFAULT: str = "#ffffff"
+    """Класс для цветовых схем интерфейса"""
+
+    def __init__(self):
+        # Цвета для различных типов трафика
+        self.HTTP_REQUEST = "#00ff00"      # Зеленый
+        self.HTTP_RESPONSE = "#0088ff"     # Синий
+        self.HTTPS_SESSION = "#ff00ff"     # Пурпурный
+        self.ERROR = "#ff0000"             # Красный
+        self.WARNING = "#ffff00"           # Желтый
+        self.INFO = "#00ffff"              # Голубой
+        self.SUCCESS = "#00ff00"           # Зеленый
+        self.DEFAULT = "#ffffff"           # Белый
+
+    def show(self):
+        """Отобразить текущие цвета в консоли"""
+        text = Text("Color Configuration\n", style="bold")
+        for attr in dir(self):
+            if not attr.startswith('_') and attr.isupper():
+                color = getattr(self, attr)
+                text.append(f"{attr}: {color}\n", style=color)
+
+        console.print(Panel(text, title="Colors", border_style="cyan"))
 
 
-@dataclass
 class Config:
-    """Конфигурация приложения"""
-    # Настройки сниффинга
-    SNIFF_TIMEOUT: int = 0
-    SNIFF_PROMISC: bool = True
-    SNIFF_FILTER: str = "tcp port 80 or tcp port 443 or tcp port 53"
+    """Основной класс конфигурации приложения"""
 
-    # Настройки отображения
-    MAX_PACKETS_DISPLAY: int = 1000
-    MAX_PAYLOAD_DISPLAY: int = 500
-    REFRESH_RATE: float = 0.1  # секунды
+    def __init__(self):
+        # Настройки сниффинга
+        self.SNIFF_TIMEOUT = 0
+        self.SNIFF_PROMISC = True  # Режим promiscuous
+        self.SNIFF_FILTER = "tcp port 80 or tcp port 443 or tcp port 53"
 
-    # Настройки MITM
-    ARP_SPOOF_INTERVAL: int = 2  # секунды
+        # Настройки отображения
+        self.MAX_PACKETS_DISPLAY = 1000
+        self.MAX_PAYLOAD_DISPLAY = 500
+        self.REFRESH_RATE = 0.1  # Секунды
 
-    # Цвета - используем field с default_factory для экземпляра класса
-    colors: Colors = field(default_factory=Colors)
+        # Настройки MITM
+        self.ARP_SPOOF_INTERVAL = 2  # Интервал отправки ARP пакетов
 
-    # Настройки логирования
-    LOG_FILE: str = "traffic_analyzer.log"
-    LOG_LEVEL: str = "INFO"
+        # Цветовая схема
+        self.colors = Colors()
 
-    @classmethod
-    def load_from_file(cls, filename: str = "config.json") -> "Config":
-        """Загрузить конфигурацию из файла"""
-        if os.path.exists(filename):
-            with open(filename, 'r') as f:
-                data = json.load(f)
+        # Настройки логирования
+        self.LOG_FILE = "traffic_analyzer.log"
+        self.LOG_LEVEL = "INFO"
 
-                # Обрабатываем цвета отдельно
-                colors_data = data.pop('colors', {}) if 'colors' in data else {}
-                config = cls(**data)
+    def load_from_file(self, fname="config.json"):
+        """Загрузить конфигурацию из JSON файла"""
+        if not os.path.exists(fname):
+            console.print(f"[yellow]Config file {fname} not found, using defaults[/yellow]")
+            return self
 
-                # Устанавливаем цвета
-                if colors_data:
-                    for key, value in colors_data.items():
-                        if hasattr(config.colors, key):
-                            setattr(config.colors, key, value)
+        with open(fname, 'r') as f:
+            data = json.load(f)
 
-                return config
-        return cls()
+        # Извлечь данные цветов
+        colors_data = data.pop('colors', {})
 
-    def save_to_file(self, filename: str = "config.json"):
-        """Сохранить конфигурацию в файл"""
-        data = {
-            key: value for key, value in self.__dict__.items()
-            if not key.startswith('_') and key != 'colors'
-        }
+        # Установить основные параметры
+        for k, v in data.items():
+            if hasattr(self, k):
+                setattr(self, k, v)
 
-        # Добавляем цвета
-        data['colors'] = self.colors.__dict__
+        # Установить цвета
+        for k, v in colors_data.items():
+            if hasattr(self.colors, k):
+                setattr(self.colors, k, v)
 
-        with open(filename, 'w') as f:
+        console.print(f"[green]Loaded config from {fname}[/green]")
+        return self
+
+    def save_to_file(self, fname="config.json"):
+        """Сохранить конфигурацию в JSON файл"""
+        data = {}
+
+        # Собрать все параметры кроме colors
+        for k in dir(self):
+            if not k.startswith('_') and k != 'colors' and k.isupper():
+                data[k] = getattr(self, k)
+
+        # Сохранить цвета
+        data['colors'] = {}
+        for k in dir(self.colors):
+            if not k.startswith('_'):
+                data['colors'][k] = getattr(self.colors, k)
+
+        # Записать в файл
+        with open(fname, 'w') as f:
             json.dump(data, f, indent=2)
 
+        console.print(f"[green]Saved config to {fname}[/green]")
 
-# Глобальная конфигурация
+    def show(self):
+        """Отобразить текущую конфигурацию в консоли"""
+        text = Text("Configuration\n", style="bold")
+        for k in dir(self):
+            if not k.startswith('_') and k != 'colors' and k.isupper():
+                v = getattr(self, k)
+                text.append(f"{k}: {v}\n")
+
+        console.print(Panel(text, title="Config", border_style="blue"))
+        self.colors.show()
+
+
+# Глобальный экземпляр конфигурации
 config = Config()

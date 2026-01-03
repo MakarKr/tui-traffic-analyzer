@@ -312,12 +312,6 @@ jobs:
           - Debian Package (.deb)
           - RPM Package (.rpm)
 
-          ### What's New:
-          - Windows version now works WITHOUT Npcap installation
-          - Automatic Npcap detection
-          - Limited functionality mode for Windows without drivers
-          - Improved compatibility
-
           ### Windows Notes:
           - With Npcap: Full packet capture and MITM functionality
           - Without Npcap: Local traffic analysis and demo mode

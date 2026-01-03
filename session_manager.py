@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import sqlite3
 import threading
 import time
 import json
-from datetime import datetime
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass, asdict
 from enum import Enum
-
 
 class PacketType(Enum):
     HTTP_REQUEST = "HTTP_REQUEST"
@@ -20,66 +15,56 @@ class PacketType(Enum):
     TCP_CONNECTION = "TCP_CONNECTION"
     UDP_SESSION = "UDP_SESSION"
 
-
-@dataclass
 class Packet:
-    timestamp: float
-    src_ip: str
-    dst_ip: str
-    src_port: int
-    dst_port: int
-    protocol: str
-    packet_type: PacketType
-    size: int
-    data: Dict[str, Any]
-    raw_data: Optional[bytes] = None
-    session_id: Optional[str] = None
+    def __init__(self, timestamp, src_ip, dst_ip, src_port, dst_port, protocol, packet_type, size, data, raw=None, session_id=None):
+        self.timestamp = timestamp
+        self.src_ip = src_ip
+        self.dst_ip = dst_ip
+        self.src_port = src_port
+        self.dst_port = dst_port
+        self.protocol = protocol
+        self.packet_type = packet_type
+        self.size = size
+        self.data = data
+        self.raw = raw
+        self.session_id = session_id
 
-
-@dataclass
 class Session:
-    session_id: str
-    start_time: float
-    end_time: Optional[float] = None
-    client_ip: str = ""
-    server_ip: str = ""
-    client_port: int = 0
-    server_port: int = 0
-    protocol: str = ""
-    packets: List[Packet] = None
-    total_bytes: int = 0
+    def __init__(self, session_id, start_time, end_time=None, client_ip="", server_ip="", client_port=0, server_port=0, protocol=""):
+        self.session_id = session_id
+        self.start_time = start_time
+        self.end_time = end_time
+        self.client_ip = client_ip
+        self.server_ip = server_ip
+        self.client_port = client_port
+        self.server_port = server_port
+        self.protocol = protocol
+        self.packets = []
+        self.total_bytes = 0
 
-    def __post_init__(self):
-        if self.packets is None:
-            self.packets = []
+    def add_packet(self, pkt):
+        self.packets.append(pkt)
+        self.total_bytes += pkt.size
+        if self.end_time is None or pkt.timestamp > self.end_time:
+            self.end_time = pkt.timestamp
 
-    def add_packet(self, packet: Packet):
-        self.packets.append(packet)
-        self.total_bytes += packet.size
-        if self.end_time is None or packet.timestamp > self.end_time:
-            self.end_time = packet.timestamp
-
-    def get_duration(self) -> float:
+    def get_duration(self):
         if self.end_time:
             return self.end_time - self.start_time
         return time.time() - self.start_time
 
-
 class SessionManager:
-    def __init__(self, db_path: str = "sessions.db"):
-        self.db_path = db_path
-        self.sessions: Dict[str, Session] = {}
-        self.packets: List[Packet] = []
+    def __init__(self, db="sessions.db"):
+        self.db = db
+        self.sessions = {}
+        self.packets = []
         self.lock = threading.Lock()
-        self.init_database()
+        self._init_db()
 
-    def init_database(self):
-        """Инициализировать базу данных"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            # Таблица сессий
-            cursor.execute('''
+    def _init_db(self):
+        with sqlite3.connect(self.db) as conn:
+            c = conn.cursor()
+            c.execute('''
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     start_time REAL,
@@ -92,9 +77,7 @@ class SessionManager:
                     total_bytes INTEGER
                 )
             ''')
-
-            # Таблица пакетов
-            cursor.execute('''
+            c.execute('''
                 CREATE TABLE IF NOT EXISTS packets (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT,
@@ -106,106 +89,87 @@ class SessionManager:
                     protocol TEXT,
                     packet_type TEXT,
                     size INTEGER,
-                    data TEXT,
-                    FOREIGN KEY (session_id) REFERENCES sessions (session_id)
+                    data TEXT
                 )
             ''')
-
-            # Индексы для быстрого поиска
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_time ON sessions(start_time)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_packets_session ON packets(session_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_packets_time ON packets(timestamp)')
-
             conn.commit()
 
-    def add_packet(self, packet: Packet):
-        """Добавить пакет в менеджер сессий"""
+    def add_packet(self, pkt):
         with self.lock:
-            self.packets.append(packet)
+            self.packets.append(pkt)
 
-            # Создаем или обновляем сессию
-            if packet.session_id:
-                if packet.session_id not in self.sessions:
-                    self.sessions[packet.session_id] = Session(
-                        session_id=packet.session_id,
-                        start_time=packet.timestamp,
-                        client_ip=packet.src_ip,
-                        server_ip=packet.dst_ip,
-                        client_port=packet.src_port,
-                        server_port=packet.dst_port,
-                        protocol=packet.protocol
+            if pkt.session_id:
+                if pkt.session_id not in self.sessions:
+                    self.sessions[pkt.session_id] = Session(
+                        session_id=pkt.session_id,
+                        start_time=pkt.timestamp,
+                        client_ip=pkt.src_ip,
+                        server_ip=pkt.dst_ip,
+                        client_port=pkt.src_port,
+                        server_port=pkt.dst_port,
+                        protocol=pkt.protocol
                     )
 
-                self.sessions[packet.session_id].add_packet(packet)
+                self.sessions[pkt.session_id].add_packet(pkt)
 
-            # Сохраняем в базу данных (в фоне)
-            threading.Thread(target=self._save_to_db, args=(packet,), daemon=True).start()
+            # Save to DB in background
+            threading.Thread(target=self._save, args=(pkt,), daemon=True).start()
 
-    def _save_to_db(self, packet: Packet):
-        """Сохранить пакет в базу данных"""
+    def _save(self, pkt):
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-
-                # Сохраняем данные пакета
-                cursor.execute('''
-                    INSERT INTO packets 
-                    (session_id, timestamp, src_ip, dst_ip, src_port, dst_port, protocol, packet_type, size, data)
+            with sqlite3.connect(self.db) as conn:
+                c = conn.cursor()
+                c.execute('''
+                    INSERT INTO packets (session_id, timestamp, src_ip, dst_ip, src_port, dst_port, protocol, packet_type, size, data)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
-                    packet.session_id,
-                    packet.timestamp,
-                    packet.src_ip,
-                    packet.dst_ip,
-                    packet.src_port,
-                    packet.dst_port,
-                    packet.protocol,
-                    packet.packet_type.value,
-                    packet.size,
-                    json.dumps(packet.data)
+                    pkt.session_id,
+                    pkt.timestamp,
+                    pkt.src_ip,
+                    pkt.dst_ip,
+                    pkt.src_port,
+                    pkt.dst_port,
+                    pkt.protocol,
+                    pkt.packet_type.value,
+                    pkt.size,
+                    json.dumps(pkt.data)
                 ))
 
-                # Обновляем или создаем сессию
-                if packet.session_id:
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO sessions 
-                        (session_id, start_time, end_time, client_ip, server_ip, client_port, server_port, protocol, total_bytes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                if pkt.session_id:
+                    s = self.sessions[pkt.session_id]
+                    c.execute('''
+                        INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
-                        packet.session_id,
-                        self.sessions[packet.session_id].start_time,
-                        self.sessions[packet.session_id].end_time,
-                        self.sessions[packet.session_id].client_ip,
-                        self.sessions[packet.session_id].server_ip,
-                        self.sessions[packet.session_id].client_port,
-                        self.sessions[packet.session_id].server_port,
-                        self.sessions[packet.session_id].protocol,
-                        self.sessions[packet.session_id].total_bytes
+                        s.session_id,
+                        s.start_time,
+                        s.end_time,
+                        s.client_ip,
+                        s.server_ip,
+                        s.client_port,
+                        s.server_port,
+                        s.protocol,
+                        s.total_bytes
                     ))
 
                 conn.commit()
         except Exception as e:
-            print(f"[!] Ошибка сохранения в БД: {e}")
+            print(f"DB error: {e}")
 
-    def get_sessions(self, limit: int = 100) -> List[Session]:
-        """Получить список сессий"""
+    def get_sessions(self, limit=100):
         with self.lock:
-            sessions = list(self.sessions.values())
-            sessions.sort(key=lambda s: s.start_time, reverse=True)
-            return sessions[:limit]
+            sess = list(self.sessions.values())
+            sess.sort(key=lambda x: x.start_time, reverse=True)
+            return sess[:limit]
 
-    def get_packets(self, session_id: Optional[str] = None, limit: int = 1000) -> List[Packet]:
-        """Получить список пакетов"""
+    def get_packets(self, session_id=None, limit=1000):
         with self.lock:
             if session_id:
                 if session_id in self.sessions:
                     return self.sessions[session_id].packets[:limit]
                 return []
-
             return self.packets[-limit:]
 
-    def get_statistics(self) -> Dict[str, Any]:
-        """Получить статистику"""
+    def get_statistics(self):
         with self.lock:
             stats = {
                 "total_sessions": len(self.sessions),
@@ -216,84 +180,45 @@ class SessionManager:
                 "https_sessions": len([p for p in self.packets if p.packet_type == PacketType.HTTPS_SESSION]),
             }
 
-            # Добавляем информацию по протоколам
-            protocols = {}
-            for packet in self.packets:
-                protocols[packet.protocol] = protocols.get(packet.protocol, 0) + 1
+            # Protocols
+            proto = {}
+            for p in self.packets:
+                proto[p.protocol] = proto.get(p.protocol, 0) + 1
+            stats["protocols"] = proto
 
-            stats["protocols"] = protocols
             return stats
 
     def clear_all(self):
-        """Очистить все данные"""
         with self.lock:
             self.sessions.clear()
             self.packets.clear()
 
-        # Очистить базу данных
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM packets")
-            cursor.execute("DELETE FROM sessions")
+        with sqlite3.connect(self.db) as conn:
+            c = conn.cursor()
+            c.execute("DELETE FROM packets")
+            c.execute("DELETE FROM sessions")
             conn.commit()
 
-    def export_to_json(self, filename: str):
-        """Экспортировать данные в JSON"""
+    def export(self, fname):
+        """Export to JSON"""
         with self.lock:
             data = {
-                "sessions": [asdict(session) for session in self.sessions.values()],
-                "statistics": self.get_statistics(),
-                "export_time": datetime.now().isoformat()
+                "sessions": [],
+                "stats": self.get_statistics()
             }
 
-            # Преобразовать объекты Packet в словари
-            for session_data in data["sessions"]:
-                session_data["packets"] = [asdict(packet) for packet in session_data["packets"]]
+            for s in self.sessions.values():
+                sess_data = {
+                    "id": s.session_id,
+                    "start": s.start_time,
+                    "end": s.end_time,
+                    "client": f"{s.client_ip}:{s.client_port}",
+                    "server": f"{s.server_ip}:{s.server_port}",
+                    "protocol": s.protocol,
+                    "bytes": s.total_bytes,
+                    "packets": len(s.packets)
+                }
+                data["sessions"].append(sess_data)
 
-            with open(filename, 'w') as f:
-                json.dump(data, f, indent=2, default=str)
-
-    def import_from_json(self, filename: str):
-        """Импортировать данные из JSON"""
-        try:
-            with open(filename, 'r') as f:
-                data = json.load(f)
-
-            with self.lock:
-                self.clear_all()
-
-                # Импорт сессий
-                for session_data in data.get("sessions", []):
-                    session = Session(
-                        session_id=session_data["session_id"],
-                        start_time=session_data["start_time"],
-                        end_time=session_data.get("end_time"),
-                        client_ip=session_data["client_ip"],
-                        server_ip=session_data["server_ip"],
-                        client_port=session_data["client_port"],
-                        server_port=session_data["server_port"],
-                        protocol=session_data["protocol"],
-                        total_bytes=session_data["total_bytes"]
-                    )
-
-                    # Импорт пакетов
-                    for packet_data in session_data.get("packets", []):
-                        packet = Packet(
-                            timestamp=packet_data["timestamp"],
-                            src_ip=packet_data["src_ip"],
-                            dst_ip=packet_data["dst_ip"],
-                            src_port=packet_data["src_port"],
-                            dst_port=packet_data["dst_port"],
-                            protocol=packet_data["protocol"],
-                            packet_type=PacketType(packet_data["packet_type"]),
-                            size=packet_data["size"],
-                            data=packet_data["data"],
-                            session_id=packet_data.get("session_id")
-                        )
-                        session.add_packet(packet)
-                        self.packets.append(packet)
-
-                    self.sessions[session.session_id] = session
-
-        except Exception as e:
-            print(f"[!] Ошибка импорта: {e}")
+            with open(fname, 'w') as f:
+                json.dump(data, f, indent=2)
