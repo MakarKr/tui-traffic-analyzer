@@ -338,10 +338,11 @@ jobs:
           - RPM Package (.rpm)
 
           ### What's New:
-          - Fixed scanner crash when accessing uninitialized variable with empty results
-          - Resolved UnboundLocalError in draw_scanner function
-          - Properly initialized max_hosts variable for all scenarios
-          - Scanner now works correctly even with empty scan results
+          - Fixed missing `draw_status_bar` method in TUI class causing crash
+          - Fixed scanner initialization error with uninitialized variable
+          - Fixed symbol lookup error with readline compatibility
+          - Scanner now works correctly even with empty results
+          - Proper handling of all TUI components on startup
 
           ### Windows Notes:
           - With Npcap: Full packet capture and MITM functionality

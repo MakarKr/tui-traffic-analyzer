@@ -1154,81 +1154,80 @@ class TUI:
                 else:
                     self.safe_addstr(y + i, x, line)
 
-def draw_scanner(self, y, x, width, height):
-    """Нарисовать сканер сети"""
-    lines = []
+    def draw_scanner(self, y, x, width, height):
+        """Нарисовать сканер сети"""
+        lines = []
 
-    lines.append("Network Scanner")
-    lines.append("=" * 40)
-    lines.append("")
-
-    if self.network_scanner.scanning:
-        lines.append("Status: SCANNING...")
+        lines.append("Network Scanner")
+        lines.append("=" * 40)
         lines.append("")
-        lines.append("Scanning in progress...")
-        lines.append("[M] on host - Set as MITM target")
-    else:
-        lines.append("Status: IDLE")
-        lines.append(f"Interface: {self.selected_interface}")
+
+        if self.network_scanner.scanning:
+            lines.append("Status: SCANNING...")
+            lines.append("")
+            lines.append("Scanning in progress...")
+            lines.append("[M] on host - Set as MITM target")
+        else:
+            lines.append("Status: IDLE")
+            lines.append(f"Interface: {self.selected_interface}")
+            lines.append("")
+            lines.append("[Enter] Start scanning")
+
         lines.append("")
-        lines.append("[Enter] Start scanning")
+        lines.append("Scan Results:")
+        lines.append("-" * 40)
 
-    lines.append("")
-    lines.append("Scan Results:")
-    lines.append("-" * 40)
+        # ВЫНЕСЕМ ОБЪЯВЛЕНИЕ ПЕРЕМЕННОЙ ЗА ПРЕДЕЛЫ УСЛОВИЯ
+        max_hosts = 0
 
-    # ВЫНЕСЕМ ОБЪЯВЛЕНИЕ ПЕРЕМЕННОЙ ЗА ПРЕДЕЛЫ УСЛОВИЯ
-    max_hosts = 0
+        if self.scan_results:
+            # Ограничиваем количество отображаемых хостов чтобы не выйти за экран
+            max_hosts = min(len(self.scan_results), height - 12)  # 12 строк уже занято
+            for i, host in enumerate(self.scan_results[:max_hosts]):
+                ip = self.sanitize_string(host['ip'])
+                mac = self.sanitize_string(host['mac'])
+                vendor = self.sanitize_string(host['vendor'])
 
-    if self.scan_results:
-        # Ограничиваем количество отображаемых хостов чтобы не выйти за экран
-        max_hosts = min(len(self.scan_results), height - 12)  # 12 строк уже занято
-        for i, host in enumerate(self.scan_results[:max_hosts]):
-            ip = self.sanitize_string(host['ip'])
-            mac = self.sanitize_string(host['mac'])
-            vendor = self.sanitize_string(host['vendor'])
+                # Показываем, если этот хост выбран как цель MITM
+                mitm_marker = " ← MITM Target" if ip == self.mitm_target_ip else ""
+                line = f"{ip:15} {mac:17} {vendor[:20]}{mitm_marker}"
+                lines.append(line)
 
-            # Показываем, если этот хост выбран как цель MITM
-            mitm_marker = " ← MITM Target" if ip == self.mitm_target_ip else ""
-            line = f"{ip:15} {mac:17} {vendor[:20]}{mitm_marker}"
-            lines.append(line)
+            if len(self.scan_results) > max_hosts:
+                lines.append(f"... and {len(self.scan_results) - max_hosts} more")
+        else:
+            lines.append("No scan results yet")
 
-        if len(self.scan_results) > max_hosts:
-            lines.append(f"... and {len(self.scan_results) - max_hosts} more")
-    else:
-        lines.append("No scan results yet")
+        lines.append("")
+        lines.append("Controls:")
+        lines.append("  [Enter] Start scan / Select host")
+        lines.append("  [M] Set selected host as MITM target")
+        lines.append("  [↑↓] Navigate hosts")
 
-    lines.append("")
-    lines.append("Controls:")
-    lines.append("  [Enter] Start scan / Select host")
-    lines.append("  [M] Set selected host as MITM target")
-    lines.append("  [↑↓] Navigate hosts")
+        # Отображаем строки
+        for i, line in enumerate(lines):
+            line_y = y + i
+            if line_y >= height + 3:
+                break
 
-    # Отображаем строки
-    for i, line in enumerate(lines):
-        line_y = y + i
-        if line_y >= height + 3:
-            break
-
-        # Выделяем выбранную строку
-        if self.current_tab == "scanner":
-            # Если это строка с результатом сканирования (после заголовков)
-            if i >= 8 and i < 8 + min(len(self.scan_results), max_hosts):  # Результаты начинаются с 8 строки
-                result_index = i - 8
-                if self.selected_row == result_index + 1:  # +1 потому что 0 - это Start scanning
+            # Выделяем выбранную строку
+            if self.current_tab == "scanner":
+                # Если это строка с результатом сканирования (после заголовков)
+                if i >= 8 and i < 8 + min(len(self.scan_results), max_hosts):  # Результаты начинаются с 8 строки
+                    result_index = i - 8
+                    if self.selected_row == result_index + 1:  # +1 потому что 0 - это Start scanning
+                        self.stdscr.attron(curses.color_pair(7))
+                    # Если это цель MITM, выделяем цветом
+                    elif result_index < len(self.scan_results) and self.scan_results[result_index]['ip'] == self.mitm_target_ip:
+                        self.stdscr.attron(curses.color_pair(1))
+                # Если это кнопка Start scanning (5 строка) и выбранная строка 0
+                elif i == 5 and self.selected_row == 0 and not self.network_scanner.scanning:
                     self.stdscr.attron(curses.color_pair(7))
-                # Если это цель MITM, выделяем цветом
-                elif result_index < len(self.scan_results) and self.scan_results[result_index]['ip'] == self.mitm_target_ip:
-                    self.stdscr.attron(curses.color_pair(1))
-            # Если это кнопка Start scanning (5 строка) и выбранная строка 0
-            elif i == 5 and self.selected_row == 0 and not self.network_scanner.scanning:
-                self.stdscr.attron(curses.color_pair(7))
 
-        self.safe_addstr(line_y, x, line)
+            self.safe_addstr(line_y, x, line)
 
-        if self.current_tab == "scanner":
-            self.stdscr.attroff(curses.color_pair(7) | curses.color_pair(1))
-
+            if self.current_tab == "scanner":
+                self.stdscr.attroff(curses.color_pair(7) | curses.color_pair(1))
 
     def draw_settings(self, y, x, width, height):
         """Нарисовать настройки"""
