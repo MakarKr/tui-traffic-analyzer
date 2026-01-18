@@ -24,7 +24,7 @@ init(autoreset=True)
 
 
 def get_keypress():
-    """Получить нажатие клавиши без Enter (кроссплатформенный)"""
+    # Получить нажатие любой клавиши без Enter (кроссплатформенный)
     try:
         # Для Windows
         if platform.system() == "Windows":
@@ -51,7 +51,7 @@ def get_keypress():
 def show_startup_info():
     """Показать всю информацию при запуске и ждать нажатия клавиши"""
     print(f"{Fore.CYAN}{'=' * 70}")
-    print(f"{Fore.CYAN} TUI Traffic Analyzer v1.0.0")
+    print(f"{Fore.CYAN} TUI Traffic Analyzer")
     print(f"{Fore.CYAN} Developer: Makar Krapivin")
     print(f"{Fore.CYAN} License: GNU GPLv3")
     print(f"{Fore.CYAN}{'=' * 70}")
@@ -71,33 +71,39 @@ def show_startup_info():
     print("   - Server's private key")
     print("   - Client's browser configuration")
     print("   - Pre-shared keys")
-    print("\n2. What CAN be analyzed:")
+    print()
+    print("2. What CAN be analyzed:")
     print("   - Server names (SNI)")
     print("   - Certificate information")
     print("   - Connection metadata")
     print("   - Data volumes and timing")
-    print("\n3. For educational purposes only!")
+    print()
+    print("3. For educational purposes only!")
     print(f"{Fore.CYAN}{'=' * 70}")
 
     # Информация о совместимости с Windows
     if platform.system() == "Windows":
-        print(f"\n{Fore.CYAN}{'=' * 70}")
+        print()
+        print(f"{Fore.CYAN}{'=' * 70}")
         print(f"{Fore.CYAN}WINDOWS COMPATIBILITY INFORMATION:")
         print(f"{Fore.CYAN}{'=' * 70}")
         print("Packet capture on Windows:")
-        print("\n1. WITH Npcap/WinPcap (recommended):")
+        print()
+        print("WITH Npcap/WinPcap (recommended):")
         print("   - Full packet capture functionality")
         print("   - Install from: https://nmap.org/npcap/")
         print("   - Select 'WinPcap API-compatible mode' during installation")
         print("   - Restart computer after installation")
-        print("\n2. WITHOUT Npcap (limited functionality):")
+        print()
+        print("WITHOUT Npcap (limited functionality):")
         print("   - Only local traffic analysis")
         print("   - Basic HTTP/HTTPS/DNS detection")
         print("   - Demo mode available")
-        print("\n3. MITM attacks on Windows:")
+        print()
+        print("MITM attacks on Windows:")
         print("   - Require Npcap for ARP spoofing")
         print("   - Limited without additional drivers")
-        print(f"\n{Fore.CYAN}{'=' * 70}")
+        print(f"{Fore.CYAN}{'=' * 70}")
 
     # Предупреждение о лицензии
     print(f"\n{Fore.RED}[!] WARNING: Unauthorized use is prohibited!")

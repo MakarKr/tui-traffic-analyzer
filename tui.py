@@ -366,8 +366,8 @@ class TUI:
 
             # Scanner: Установить выбранный хост как цель MITM
             elif key == ord('m') or key == ord('M'):
-                if self.current_tab == "scanner" and self.selected_row >= 2:
-                    host_index = self.selected_row - 2
+                if self.current_tab == "scanner" and self.selected_row >= 1:
+                    host_index = self.selected_row - 1
                     if 0 <= host_index < len(self.scan_results):
                         self.mitm_target_ip = self.scan_results[host_index]['ip']
                         self.mitm_status_message = f"Target set to: {self.mitm_target_ip}"
@@ -416,9 +416,9 @@ class TUI:
                     self.scroll_offset = max(0, self.selected_row)
 
         elif self.current_tab == "scanner":
-            # В сканере есть выбор хоста
-            max_rows = len(self.scan_results) + 1  # Результаты + 1 строка управления
-            self.selected_row = max(0, self.selected_row - 1)
+            # В сканере: 0=Start scan, далее результаты
+            if self.selected_row > 0:
+                self.selected_row -= 1
 
         elif self.current_tab == "settings":
             # В настройках выбираем интерфейс
@@ -1165,21 +1165,21 @@ class TUI:
         if self.network_scanner.scanning:
             lines.append("Status: SCANNING...")
             lines.append("")
-            lines.append("[Enter] on host - Set as MITM target")
+            lines.append("Scanning in progress...")
+            lines.append("[M] on host - Set as MITM target")
         else:
             lines.append("Status: IDLE")
             lines.append(f"Interface: {self.selected_interface}")
             lines.append("")
             lines.append("[Enter] Start scanning")
 
-        lines.append("[M] Set selected host as MITM target")
         lines.append("")
         lines.append("Scan Results:")
         lines.append("-" * 40)
 
         if self.scan_results:
             # Ограничиваем количество отображаемых хостов чтобы не выйти за экран
-            max_hosts = min(len(self.scan_results), height - 10)
+            max_hosts = min(len(self.scan_results), height - 12)  # 12 строк уже занято
             for i, host in enumerate(self.scan_results[:max_hosts]):
                 ip = self.sanitize_string(host['ip'])
                 mac = self.sanitize_string(host['mac'])
@@ -1197,9 +1197,9 @@ class TUI:
 
         lines.append("")
         lines.append("Controls:")
-        lines.append("  [Enter] on host - Set as MITM target")
-        lines.append("  [M] - Set selected host as MITM target")
-        lines.append("  [↑↓] - Navigate hosts")
+        lines.append("  [Enter] Start scan / Select host")
+        lines.append("  [M] Set selected host as MITM target")
+        lines.append("  [↑↓] Navigate hosts")
 
         # Отображаем строки
         for i, line in enumerate(lines):
@@ -1209,20 +1209,17 @@ class TUI:
 
             # Выделяем выбранную строку
             if self.current_tab == "scanner":
-                # Заголовок и строка состояния - 0 и 1
-                # Кнопки Start/Stop - 5 и 6 (после пустой строки)
-                # Результаты сканирования начинаются с 9 строки
-
-                if i == 5 and self.selected_row == 0:  # Start scanning
+                # Если это строка с результатом сканирования (после заголовков)
+                if i >= 8 and i < 8 + len(self.scan_results[:max_hosts]):  # Результаты начинаются с 8 строки
+                    result_index = i - 8
+                    if self.selected_row == result_index + 1:  # +1 потому что 0 - это Start scanning
+                        self.stdscr.attron(curses.color_pair(7))
+                    # Если это цель MITM, выделяем цветом
+                    elif self.scan_results[result_index]['ip'] == self.mitm_target_ip:
+                        self.stdscr.attron(curses.color_pair(1))
+                # Если это кнопка Start scanning (5 строка) и выбранная строка 0
+                elif i == 5 and self.selected_row == 0 and not self.network_scanner.scanning:
                     self.stdscr.attron(curses.color_pair(7))
-                elif i >= 9 and i < 9 + len(self.scan_results):  # Результаты сканирования
-                    result_index = i - 9
-                    if 0 <= result_index < len(self.scan_results):
-                        if self.selected_row == result_index + 1:  # +1 потому что первая строка - Start scanning
-                            self.stdscr.attron(curses.color_pair(7))
-                        # Если это цель MITM, выделяем цветом
-                        elif self.scan_results[result_index]['ip'] == self.mitm_target_ip:
-                            self.stdscr.attron(curses.color_pair(1))
 
             self.safe_addstr(line_y, x, line)
 
