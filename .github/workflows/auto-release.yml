@@ -338,15 +338,10 @@ jobs:
           - RPM Package (.rpm)
 
           ### What's New:
-          - Fixed MITM attack functionality (now actually intercepts traffic)
-          - Improved network scanner with accurate IP detection
-          - Enhanced MAC vendor database with 6MB JSON database from maclookup.app
-          - Built-in backup MAC database in code (300+ vendors)
-          - Fixed scanner navigation and selection (no more offset issues)
-          - Windows version now works WITHOUT Npcap installation
-          - Automatic Npcap detection
-          - Limited functionality mode for Windows without drivers
-          - Improved compatibility
+          - Fixed scanner crash when accessing uninitialized variable with empty results
+          - Resolved UnboundLocalError in draw_scanner function
+          - Properly initialized max_hosts variable for all scenarios
+          - Scanner now works correctly even with empty scan results
 
           ### Windows Notes:
           - With Npcap: Full packet capture and MITM functionality
