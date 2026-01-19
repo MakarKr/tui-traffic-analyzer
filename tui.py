@@ -456,7 +456,7 @@ class TUI:
 
         elif self.current_tab == "scanner":
             # В сканере: 0=Start scan, далее результаты
-            max_rows = len(self.scan_results)  # Только результаты
+            max_rows = len(self.scan_results) if self.scan_results else 0
             if self.selected_row < max_rows:
                 self.selected_row += 1
 
@@ -497,7 +497,7 @@ class TUI:
         elif self.current_tab == "scanner":
             if self.selected_row == 0:
                 self.start_scan()
-            elif self.selected_row >= 1:
+            elif self.selected_row >= 1 and self.scan_results:
                 # Выбор хоста из результатов сканирования
                 host_index = self.selected_row - 1
                 if 0 <= host_index < len(self.scan_results):
@@ -1158,14 +1158,17 @@ class TUI:
         """Нарисовать сканер сети"""
         lines = []
 
+        # Заголовок
         lines.append("Network Scanner")
         lines.append("=" * 40)
         lines.append("")
 
+        # Статус и информация
         if self.network_scanner.scanning:
             lines.append("Status: SCANNING...")
             lines.append("")
             lines.append("Scanning in progress...")
+            lines.append("")
             lines.append("[M] on host - Set as MITM target")
         else:
             lines.append("Status: IDLE")
@@ -1182,7 +1185,9 @@ class TUI:
 
         if self.scan_results:
             # Ограничиваем количество отображаемых хостов чтобы не выйти за экран
-            max_hosts = min(len(self.scan_results), height - 12)  # 12 строк уже занято
+            # 12 строк уже занято (заголовки и управление)
+            max_hosts = min(len(self.scan_results), height - 12) if height > 12 else len(self.scan_results)
+
             for i, host in enumerate(self.scan_results[:max_hosts]):
                 ip = self.sanitize_string(host['ip'])
                 mac = self.sanitize_string(host['mac'])
@@ -1210,19 +1215,29 @@ class TUI:
             if line_y >= height + 3:
                 break
 
-            # Выделяем выбранную строку
+            # Определяем, является ли это строка с результатом сканирования
+            is_result_line = False
+            result_index = -1
+
+            # Результаты начинаются после 10 строк заголовка (0-9)
+            if i >= 10 and i < 10 + (max_hosts if self.scan_results else 0):
+                is_result_line = True
+                result_index = i - 10  # Индекс результата (0-based)
+
+            # Определяем, является ли это строка "Start scanning"
+            is_start_scan_line = (i == 6 and not self.network_scanner.scanning)
+
+            # Выделение
             if self.current_tab == "scanner":
-                # Если это строка с результатом сканирования (после заголовков)
-                if i >= 8 and i < 8 + min(len(self.scan_results), max_hosts):  # Результаты начинаются с 8 строки
-                    result_index = i - 8
-                    if self.selected_row == result_index + 1:  # +1 потому что 0 - это Start scanning
-                        self.stdscr.attron(curses.color_pair(7))
-                    # Если это цель MITM, выделяем цветом
-                    elif result_index < len(self.scan_results) and self.scan_results[result_index]['ip'] == self.mitm_target_ip:
-                        self.stdscr.attron(curses.color_pair(1))
-                # Если это кнопка Start scanning (5 строка) и выбранная строка 0
-                elif i == 5 and self.selected_row == 0 and not self.network_scanner.scanning:
+                # Если это строка "Start scanning" и выбрана строка 0
+                if is_start_scan_line and self.selected_row == 0:
                     self.stdscr.attron(curses.color_pair(7))
+                # Если это строка с результатом и выбран соответствующий результат
+                elif is_result_line and result_index == self.selected_row - 1:
+                    self.stdscr.attron(curses.color_pair(7))
+                # Если это результат и это цель MITM
+                elif is_result_line and result_index < len(self.scan_results) and self.scan_results[result_index]['ip'] == self.mitm_target_ip:
+                    self.stdscr.attron(curses.color_pair(1))
 
             self.safe_addstr(line_y, x, line)
 
@@ -1472,7 +1487,10 @@ class TUI:
             if sessions:
                 position_info = f"Session {self.selected_row + 1}/{len(sessions)}"
         elif self.current_tab == "scanner":
-            if self.scan_results:
+            # Для сканера: selected_row=0 -> "Start scan", >0 -> хост
+            if self.selected_row == 0:
+                position_info = "Start scan"
+            elif self.scan_results:
                 position_info = f"Host {self.selected_row}/{len(self.scan_results)}"
         elif self.current_tab == "settings":
             if self.interfaces:
