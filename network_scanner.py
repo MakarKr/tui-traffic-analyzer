@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from scapy.all import ARP, Ether, srp, conf
-import threading
+import platform
 import time
+import threading
+import subprocess
 import json
 import os
+import sys
 from typing import List, Dict, Optional
 from utils import get_interface_info
+import ipaddress
 
 
 class NetworkScanner:
@@ -15,7 +18,10 @@ class NetworkScanner:
         self.hosts = []
         self.scanning = False
         self.scan_thread = None
-        self.mac_vendors_db = self._load_mac_vendors_db()
+        self.mac_vendors_db = {}
+        self.progress = 0
+        self.total_hosts = 0
+        self.current_host = 0
 
         # ВСТРОЕННАЯ РЕЗЕРВНАЯ БАЗА ДАННЫХ ПРЯМО В КОДЕ
         self.builtin_mac_db = {
@@ -231,8 +237,8 @@ class NetworkScanner:
             "2C:44:01": "Samsung",
             "2C:54:CF": "Samsung",
             "30:19:66": "Samsung",
-            "34:23:BA": "Samsung",
-            "34:BE:00": "Samsung",
+            "30:23:BA": "Samsung",
+            "30:BE:00": "Samsung",
             "38:01:95": "Samsung",
             "38:2C:4A": "Samsung",
             "3C:8B:FE": "Samsung",
@@ -352,6 +358,9 @@ class NetworkScanner:
             "00:16:3E": "Microsoft (Xen)",
         }
 
+        # Загружаем базу данных производителей
+        self._load_mac_vendors_db()
+
     def _load_mac_vendors_db(self) -> Dict:
         """Загрузить базу данных производителей MAC-адресов из JSON файла"""
         vendors_db = {}
@@ -360,96 +369,303 @@ class NetworkScanner:
 
         try:
             if os.path.exists(db_path):
+                file_size = os.path.getsize(db_path)
+                print(f"[*] Loading MAC vendors database ({file_size:,} bytes)")
+
                 with open(db_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
                     for entry in data:
-                        # Нормализуем MAC префикс для поиска
-                        mac_prefix = entry['macPrefix'].upper().replace(':', '').replace('-', '')
-                        vendors_db[mac_prefix] = entry['vendorName']
+                        mac_prefix = entry.get('macPrefix', '').upper().replace(':', '').replace('-', '')
+                        vendor_name = entry.get('vendorName', 'Unknown')
+                        if mac_prefix and vendor_name:
+                            vendors_db[mac_prefix] = vendor_name
+
                 print(f"[*] Loaded {len(vendors_db)} MAC vendors from database")
+                return vendors_db
             else:
                 print(f"[!] MAC vendors database not found at {db_path}")
                 print(f"[*] Using built-in database with {len(self.builtin_mac_db)} vendors")
+                return {}
+
+        except json.JSONDecodeError as e:
+            print(f"[!] Error parsing MAC vendors database: {e}")
+            print(f"[*] Using built-in database with {len(self.builtin_mac_db)} vendors")
+            return {}
         except Exception as e:
             print(f"[!] Error loading MAC vendors database: {e}")
             print(f"[*] Using built-in database with {len(self.builtin_mac_db)} vendors")
-
-        return vendors_db
+            return {}
 
     def scan_network(self, network_range: str, interface: str = None, timeout: int = 2) -> List[Dict]:
-        """Сканировать сеть на наличие активных хостов"""
+        """Сканировать сеть на наличие активных хостов с улучшенной надежностью"""
+        print(f"[*] Starting network scan: {network_range}")
+        print(f"[*] Interface: {interface}")
+        print(f"[*] Timeout: {timeout}s")
+
+        hosts = []
+
         try:
-            print(f"[*] Scanning network: {network_range} on interface: {interface}")
+            # Парсим диапазон сети
+            try:
+                network = ipaddress.IPv4Network(network_range, strict=False)
+                self.total_hosts = network.num_addresses - 2  # Минус сетевой адрес и broadcast
+                print(f"[*] Network has {self.total_hosts} possible hosts")
 
-            # Создаем ARP запрос
-            arp_request = ARP(pdst=network_range)
-            broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
-            arp_request_broadcast = broadcast / arp_request
+                if self.total_hosts > 1000:
+                    print(f"[!] Large network detected ({self.total_hosts} hosts). Scanning may take time.")
+                    print(f"[*] Consider scanning specific subnets for faster results.")
 
-            # Отправляем пакеты
-            answered_list = srp(
-                arp_request_broadcast,
-                timeout=timeout,
-                verbose=False,
-                iface=interface
-            )[0]
+            except ValueError as e:
+                print(f"[!] Invalid network range: {network_range}")
+                print(f"[!] Error: {e}")
+                return hosts
 
-            print(f"[*] Found {len(answered_list)} active hosts")
+            # Проверяем доступность Scapy
+            try:
+                from scapy.all import ARP, Ether, srp
+                print("[*] Using Scapy for ARP scanning")
 
-            # Обрабатываем ответы
-            hosts = []
-            for sent, received in answered_list:
-                mac = received.hwsrc.upper()
-                vendor = self.get_vendor_by_mac(mac)
+                # Преобразуем сеть в список IP адресов
+                target_ips = [str(ip) for ip in network.hosts()]
 
-                hosts.append({
-                    "ip": received.psrc,
-                    "mac": mac,
-                    "vendor": vendor,
-                    "interface": interface
-                })
+                # Сканируем частями для больших сетей
+                batch_size = 256
+                for i in range(0, len(target_ips), batch_size):
+                    if not self.scanning:
+                        print("[*] Scan stopped by user")
+                        break
 
-            return hosts
+                    batch = target_ips[i:i + batch_size]
+                    self.current_host = i
 
+                    # Создаем ARP запрос для батча
+                    arp_request = ARP(pdst=batch)
+                    broadcast = Ether(dst="ff:ff:ff:ff:ff:ff")
+                    arp_request_broadcast = broadcast / arp_request
+
+                    # Отправляем пакеты
+                    answered_list = srp(
+                        arp_request_broadcast,
+                        timeout=timeout,
+                        verbose=False,
+                        iface=interface,
+                        retry=1
+                    )[0]
+
+                    # Обрабатываем ответы
+                    for sent, received in answered_list:
+                        mac = received.hwsrc.upper()
+                        vendor = self.get_vendor_by_mac(mac)
+
+                        host_info = {
+                            "ip": received.psrc,
+                            "mac": mac,
+                            "vendor": vendor,
+                            "interface": interface
+                        }
+                        hosts.append(host_info)
+
+                    print(f"[*] Scanned {min(i + batch_size, len(target_ips))}/{len(target_ips)} hosts, found {len(hosts)} active")
+
+            except ImportError:
+                print("[!] Scapy not available, using alternative methods")
+                hosts = self._scan_without_scapy(network, interface)
+
+        except KeyboardInterrupt:
+            print("\n[*] Scan interrupted by user")
         except Exception as e:
-            print(f"[!] Ошибка сканирования: {e}")
+            print(f"[!] Error during network scan: {e}")
             import traceback
             traceback.print_exc()
-            return []
+
+        print(f"[*] Scan complete: found {len(hosts)} active hosts")
+        return hosts
+
+    def _scan_without_scapy(self, network, interface: str) -> List[Dict]:
+        """Альтернативное сканирование без Scapy"""
+        print("[*] Using alternative scanning method (limited functionality)")
+
+        hosts = []
+
+        if platform.system() == "Windows":
+            # На Windows используем ping
+            import subprocess
+
+            target_ips = [str(ip) for ip in network.hosts()][:100]  # Ограничиваем для скорости
+
+            for ip in target_ips:
+                if not self.scanning:
+                    break
+
+                try:
+                    # Ping с таймаутом
+                    result = subprocess.run(
+                        f"ping -n 1 -w 1000 {ip}",
+                        shell=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=2
+                    )
+
+                    if "TTL=" in result.stdout or "ttl=" in result.stdout.lower():
+                        # Хост отвечает, пытаемся получить MAC из ARP кэша
+                        mac = self._get_mac_from_arp_cache(ip)
+                        vendor = self.get_vendor_by_mac(mac) if mac else "Unknown"
+
+                        hosts.append({
+                            "ip": ip,
+                            "mac": mac or "Unknown",
+                            "vendor": vendor,
+                            "interface": interface
+                        })
+
+                except:
+                    continue
+
+        else:
+            # На Linux/Mac используем arping или nmap если есть
+            import subprocess
+
+            try:
+                # Пробуем использовать arping
+                target_ips = [str(ip) for ip in network.hosts()][:50]
+
+                for ip in target_ips:
+                    if not self.scanning:
+                        break
+
+                    try:
+                        result = subprocess.run(
+                            f"arping -c 1 -w 1 {ip}",
+                            shell=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=3
+                        )
+
+                        if result.returncode == 0:
+                            # Парсим MAC из вывода
+                            lines = result.stdout.split('\n')
+                            for line in lines:
+                                if '[' in line and ']' in line:
+                                    parts = line.split('[')
+                                    if len(parts) > 1:
+                                        mac_part = parts[1].split(']')[0]
+                                        if ':' in mac_part or '-' in mac_part:
+                                            mac = mac_part.replace('-', ':').upper()
+                                            vendor = self.get_vendor_by_mac(mac)
+
+                                            hosts.append({
+                                                "ip": ip,
+                                                "mac": mac,
+                                                "vendor": vendor,
+                                                "interface": interface
+                                            })
+                                            break
+                    except:
+                        continue
+
+            except:
+                print("[!] Alternative scanning methods failed")
+
+        return hosts
+
+    def _get_mac_from_arp_cache(self, ip: str) -> Optional[str]:
+        """Получить MAC адрес из ARP кэша"""
+        try:
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    f"arp -a {ip}",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+            else:
+                result = subprocess.run(
+                    f"arp -n {ip}",
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=2
+                )
+
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if ip in line:
+                        # Ищем MAC адрес в строке
+                        import re
+                        mac_pattern = re.compile(r'([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})')
+                        match = mac_pattern.search(line)
+                        if match:
+                            mac = match.group(0)
+                            if '-' in mac:
+                                mac = mac.replace('-', ':')
+                            return mac.upper()
+        except:
+            pass
+
+        return None
 
     def scan_async(self, network_range: str, interface: str, callback):
-        """Асинхронное сканирование сети"""
+        """Асинхронное сканирование сети с обработкой ошибок"""
+        if self.scanning:
+            print("[!] Scan already in progress")
+            return
+
         self.scanning = True
+        self.hosts = []
+        self.progress = 0
+        self.current_host = 0
 
         def scan_task():
             try:
                 results = self.scan_network(network_range, interface)
+                self.scanning = False
                 callback(results)
+            except Exception as e:
+                print(f"[!] Error in scan thread: {e}")
+                self.scanning = False
+                callback([])
             finally:
                 self.scanning = False
 
         self.scan_thread = threading.Thread(target=scan_task, daemon=True)
         self.scan_thread.start()
 
+        print(f"[*] Async scan started in background thread")
+
     def stop_scan(self):
         """Остановить сканирование"""
+        if not self.scanning:
+            return
+
+        print("[*] Stopping scan...")
         self.scanning = False
+
         if self.scan_thread:
-            self.scan_thread.join(timeout=1)
+            self.scan_thread.join(timeout=5)
+            if self.scan_thread.is_alive():
+                print("[!] Scan thread did not terminate properly")
+            else:
+                print("[*] Scan stopped successfully")
 
     def get_vendor_by_mac(self, mac: str) -> str:
-        """Определить производителя по MAC адресу"""
-        if not mac:
-            return "Неизвестно"
+        """Определить производителя по MAC адресу с улучшенной обработкой"""
+        if not mac or mac == "Unknown":
+            return "Unknown"
 
-        # Нормализуем MAC адрес
-        mac_clean = mac.upper().replace(':', '').replace('-', '')
+        try:
+            # Нормализуем MAC адрес
+            mac_clean = mac.upper().replace(':', '').replace('-', '')
 
-        # Проверяем первые 6 символов (OUI)
-        if len(mac_clean) >= 6:
+            if len(mac_clean) < 6:
+                return "Unknown"
+
             oui_prefix = mac_clean[:6]
 
-            # Ищем в JSON базе данных
+            # Ищем в загруженной JSON базе данных
             if self.mac_vendors_db and oui_prefix in self.mac_vendors_db:
                 return self.mac_vendors_db[oui_prefix]
 
@@ -460,22 +676,57 @@ class NetworkScanner:
             if formatted_oui in self.builtin_mac_db:
                 return self.builtin_mac_db[formatted_oui]
 
-        return "Неизвестно"
+            # Проверяем специальные случаи
+            if formatted_oui.startswith("00:50:56") or formatted_oui.startswith("00:0C:29"):
+                return "VMware"
+            elif formatted_oui.startswith("52:54:00"):
+                return "QEMU/KVM"
+            elif formatted_oui.startswith("00:1C:42"):
+                return "Parallels"
+            elif formatted_oui.startswith("08:00:27") or formatted_oui.startswith("0A:00:27"):
+                return "VirtualBox"
+
+        except Exception as e:
+            print(f"[!] Error determining vendor for MAC {mac}: {e}")
+
+        return "Unknown"
 
     def get_local_network_range(self, interface: str) -> Optional[str]:
-        """Получить диапазон локальной сети"""
-        info = get_interface_info(interface)
-        if info["ip"] and info["netmask"]:
-            import ipaddress
+        """Получить диапазон локальной сети с улучшенной обработкой ошибок"""
+        try:
+            info = get_interface_info(interface)
+            if not info:
+                print(f"[!] No information for interface {interface}")
+                return None
+
+            ip = info.get("ip")
+            netmask = info.get("netmask")
+
+            if not ip or not netmask:
+                print(f"[!] Interface {interface} has no IP or netmask")
+                print(f"    IP: {ip}, Netmask: {netmask}")
+                return None
+
+            print(f"[*] Interface {interface}: IP={ip}, Netmask={netmask}")
+
             try:
-                network = ipaddress.IPv4Network(f"{info['ip']}/{info['netmask']}", strict=False)
-                return str(network)
-            except Exception as e:
-                print(f"[!] Error calculating network range: {e}")
-                # Попробуем альтернативный метод
+                # Используем ipaddress для расчета сети
+                network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+                network_range = str(network)
+                print(f"[*] Calculated network range: {network_range}")
+                return network_range
+
+            except ValueError as e:
+                print(f"[!] Error calculating network from {ip}/{netmask}: {e}")
+
+                # Альтернативный расчет
                 try:
-                    ip_parts = info['ip'].split('.')
-                    netmask_parts = info['netmask'].split('.')
+                    ip_parts = ip.split('.')
+                    netmask_parts = netmask.split('.')
+
+                    if len(ip_parts) != 4 or len(netmask_parts) != 4:
+                        print("[!] Invalid IP or netmask format")
+                        return None
 
                     # Вычисляем сетевой адрес
                     network_parts = []
@@ -483,15 +734,29 @@ class NetworkScanner:
                         network_parts.append(str(int(ip_parts[i]) & int(netmask_parts[i])))
 
                     # Вычисляем префикс сети
-                    prefix = sum(bin(int(x)).count('1') for x in netmask_parts)
+                    prefix = 0
+                    for octet in netmask_parts:
+                        binary = bin(int(octet))[2:].zfill(8)
+                        prefix += binary.count('1')
 
                     network_range = f"{'.'.join(network_parts)}/{prefix}"
-                    print(f"[*] Calculated network range: {network_range}")
+                    print(f"[*] Alternative calculation: {network_range}")
                     return network_range
+
                 except Exception as e2:
                     print(f"[!] Alternative calculation also failed: {e2}")
-                    return None
-        else:
-            print(f"[!] No IP or netmask for interface {interface}")
-            print(f"[*] Interface info: {info}")
-            return None
+
+        except Exception as e:
+            print(f"[!] Error getting local network range: {e}")
+
+        return None
+
+    def get_scan_progress(self) -> Dict:
+        """Получить прогресс сканирования"""
+        return {
+            "scanning": self.scanning,
+            "progress": self.progress,
+            "current_host": self.current_host,
+            "total_hosts": self.total_hosts,
+            "hosts_found": len(self.hosts)
+        }
