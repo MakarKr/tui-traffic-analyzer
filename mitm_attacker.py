@@ -479,7 +479,7 @@ class MITMAttacker:
             # На Windows включаем IP forwarding через реестр
             try:
                 subprocess.run(
-                    'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
+                    r'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
                     '/v IPEnableRouter /t REG_DWORD /d 1 /f',
                     shell=True, check=True, timeout=5
                 )
@@ -575,7 +575,7 @@ class MITMAttacker:
             # На Windows отключаем IP forwarding
             try:
                 subprocess.run(
-                    'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
+                    r'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
                     '/v IPEnableRouter /t REG_DWORD /d 0 /f',
                     shell=True, check=True, timeout=5
                 )
@@ -1089,7 +1089,7 @@ class MITMAttacker:
                     # На Windows включаем IP forwarding через реестр
                     try:
                         subprocess.run(
-                            'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
+                            r'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
                             '/v IPEnableRouter /t REG_DWORD /d 1 /f',
                             shell=True, check=True, timeout=5
                         )
@@ -1185,7 +1185,7 @@ class MITMAttacker:
                     # На Windows отключаем IP forwarding
                     try:
                         subprocess.run(
-                            'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
+                            r'reg add "HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters" '
                             '/v IPEnableRouter /t REG_DWORD /d 0 /f',
                             shell=True, check=True, timeout=5
                         )
